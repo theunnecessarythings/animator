@@ -1,364 +1,109 @@
 #include "commands.h"
 #include "ecs.h"
+#include "serialization.h"
 #include "window.h"
 
-// AddEntityCommand
-AddEntityCommand::AddEntityCommand(MainWindow *mainWindow, Entity entity,
-                                   QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(mainWindow), m_entity(entity) {
+// serialise a single entity
+inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
+  return serializeEntity(scene, e);
+}
+
+// restore into *exactly the same handle* if possible
+inline void restoreInto(Scene &scene, Entity e, const QJsonObject &json) {
+  // rebuild all components on top of the existing handle
+  scene.reg.destroy(e);
+  ComponentRegistry::instance().apply(scene, e, json);
+}
+
+// create a *fresh* entity
+inline Entity createFrom(Scene &scene, const QJsonObject &json) {
+  Entity e = scene.reg.create();
+  ComponentRegistry::instance().apply(scene, e, json);
+  return e;
+}
+
+/* recreates the entity, returns its (new) id */
+Entity restoreEntity(Scene &scene, const QJsonObject &json) {
+  Entity e = scene.reg.create();
+  ComponentRegistry::instance().apply(scene, e, json);
+  return e;
+}
+
+AddEntityCommand::AddEntityCommand(MainWindow *w, Entity e, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e),
+      m_entityData(snapshotEntity(w->canvas()->scene(), e)) {
   setText(QObject::tr("Add Entity"));
-  // Serialize the entity's current state for undo
-  QJsonObject entityObject;
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  if (auto *name =
-          m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
-    entityObject["NameComponent"] = name->name.c_str();
-  }
-  if (auto *transform = m_scene.reg.get<TransformComponent>(m_entity)) {
-    QJsonObject transformObject;
-    transformObject["x"] = transform->x;
-    transformObject["y"] = transform->y;
-    transformObject["rotation"] = transform->rotation;
-    transformObject["sx"] = transform->sx;
-    transformObject["sy"] = transform->sy;
-    entityObject["TransformComponent"] = transformObject;
-  }
-  if (auto *material = m_scene.reg.get<MaterialComponent>(m_entity)) {
-    QJsonObject materialObject;
-    materialObject["color"] = (qint64)material->color;
-    materialObject["isFilled"] = material->isFilled;
-    materialObject["isStroked"] = material->isStroked;
-    materialObject["strokeWidth"] = material->strokeWidth;
-    materialObject["antiAliased"] = material->antiAliased;
-    entityObject["MaterialComponent"] = materialObject;
-  }
-  if (auto *animation = m_scene.reg.get<AnimationComponent>(m_entity)) {
-    QJsonObject animationObject;
-    animationObject["entryTime"] = animation->entryTime;
-    animationObject["exitTime"] = animation->exitTime;
-    entityObject["AnimationComponent"] = animationObject;
-  }
-  if (auto *script = m_scene.reg.get<ScriptComponent>(m_entity)) {
-    QJsonObject scriptObject;
-    scriptObject["scriptPath"] = script->scriptPath.c_str();
-    scriptObject["startFunction"] = script->startFunction.c_str();
-    scriptObject["updateFunction"] = script->updateFunction.c_str();
-    scriptObject["destroyFunction"] = script->destroyFunction.c_str();
-    entityObject["ScriptComponent"] = scriptObject;
-  }
-  if (m_scene.reg.has<SceneBackgroundComponent>(m_entity)) {
-    entityObject["SceneBackgroundComponent"] = true;
-  }
-  if (auto *shape = m_scene.reg.get<ShapeComponent>(m_entity)) {
-    QJsonObject shapeObject;
-    shapeObject["kind"] = (int)shape->kind;
-    shapeObject["properties"] = shape->getProperties().toJsonObject();
-    entityObject["ShapeComponent"] = shapeObject;
-  }
-  m_entityData = entityObject;
+  m_firstRedo = true;
 }
 
 void AddEntityCommand::undo() {
   m_mainWindow->canvas()->scene().reg.destroy(m_entity);
-  m_entity = kInvalidEntity; // Invalidate entity ID after destruction
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
 void AddEntityCommand::redo() {
-  // Recreate the entity and its components from m_entityData
-  // This assumes the entity ID can be reused or is not critical for redo
-  // If entity ID must be preserved, a more complex mapping is needed.
-  // For simplicity, we'll create a new entity and update m_entity
-  // if this command is redone after an undo.
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  if (m_entity == kInvalidEntity) {
-    m_entity = m_scene.reg.create();
+  if (m_firstRedo) { // nothing to do – entity already there
+    m_firstRedo = false;
+    return;
   }
-
-  if (m_entityData.contains("NameComponent") &&
-      m_entityData["NameComponent"].isString()) {
-    m_scene.reg.emplace<NameComponent>(
-        m_entity,
-        NameComponent{m_entityData["NameComponent"].toString().toStdString()});
-  }
-  if (m_entityData.contains("TransformComponent") &&
-      m_entityData["TransformComponent"].isObject()) {
-    QJsonObject transformObject = m_entityData["TransformComponent"].toObject();
-    m_scene.reg.emplace<TransformComponent>(
-        m_entity,
-        TransformComponent{(float)transformObject["x"].toDouble(),
-                           (float)transformObject["y"].toDouble(),
-                           (float)transformObject["rotation"].toDouble(),
-                           (float)transformObject["sx"].toDouble(),
-                           (float)transformObject["sy"].toDouble()});
-  }
-  if (m_entityData.contains("MaterialComponent") &&
-      m_entityData["MaterialComponent"].isObject()) {
-    QJsonObject materialObject = m_entityData["MaterialComponent"].toObject();
-    m_scene.reg.emplace<MaterialComponent>(
-        m_entity,
-        MaterialComponent{
-            (SkColor)materialObject["color"].toVariant().toULongLong(),
-            materialObject["isFilled"].toBool(),
-            materialObject["isStroked"].toBool(),
-            (float)materialObject["strokeWidth"].toDouble(),
-            materialObject["antiAliased"].toBool()});
-  }
-  if (m_entityData.contains("AnimationComponent") &&
-      m_entityData["AnimationComponent"].isObject()) {
-    QJsonObject animationObject = m_entityData["AnimationComponent"].toObject();
-    m_scene.reg.emplace<AnimationComponent>(
-        m_entity,
-        AnimationComponent{(float)animationObject["entryTime"].toDouble(),
-                           (float)animationObject["exitTime"].toDouble()});
-  }
-  if (m_entityData.contains("ScriptComponent") &&
-      m_entityData["ScriptComponent"].isObject()) {
-    QJsonObject scriptObject = m_entityData["ScriptComponent"].toObject();
-    m_scene.reg.emplace<ScriptComponent>(
-        m_entity,
-        ScriptComponent{
-            scriptObject["scriptPath"].toString().toStdString(),
-            scriptObject["startFunction"].toString().toStdString(),
-            scriptObject["updateFunction"].toString().toStdString(),
-            scriptObject["destroyFunction"].toString().toStdString()});
-  }
-  if (m_entityData.contains("SceneBackgroundComponent") &&
-      m_entityData["SceneBackgroundComponent"].toBool()) {
-    m_scene.reg.emplace<SceneBackgroundComponent>(m_entity);
-  }
-  if (m_entityData.contains("ShapeComponent") &&
-      m_entityData["ShapeComponent"].isObject()) {
-    QJsonObject shapeObject = m_entityData["ShapeComponent"].toObject();
-    ShapeComponent::Kind kind =
-        (ShapeComponent::Kind)shapeObject["kind"].toInt();
-    ShapeComponent shapeComp{kind, std::monostate{}};
-
-    if (shapeObject.contains("properties") &&
-        shapeObject["properties"].isObject()) {
-      QJsonObject propsObject = shapeObject["properties"].toObject();
-      switch (kind) {
-      case ShapeComponent::Kind::Rectangle: {
-        RectangleProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Circle: {
-        CircleProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      }
-    } else {
-      // If properties are empty or missing, initialize with defaults
-      // based on kind
-      if (kind == ShapeComponent::Kind::Rectangle) {
-        shapeComp.properties.emplace<RectangleProperties>();
-      } else if (kind == ShapeComponent::Kind::Circle) {
-        shapeComp.properties.emplace<CircleProperties>();
-      }
-    }
-    m_scene.reg.emplace<ShapeComponent>(m_entity, shapeComp);
-  }
+  auto &scene = m_mainWindow->canvas()->scene();
+  m_entity = createFrom(scene, m_entityData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
-// RemoveEntityCommand
-RemoveEntityCommand::RemoveEntityCommand(MainWindow *window, Entity entity,
-                                         QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity) {
+RemoveEntityCommand::RemoveEntityCommand(MainWindow *w, Entity e,
+                                         QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e),
+      m_entityData(snapshotEntity(w->canvas()->scene(), e)) {
   setText(QObject::tr("Remove Entity"));
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  // Serialize the entity's current state for undo
-  QJsonObject entityObject;
-  if (auto *name = m_scene.reg.get<NameComponent>(m_entity)) {
-    entityObject["NameComponent"] = name->name.c_str();
-  }
-  if (auto *transform = m_scene.reg.get<TransformComponent>(m_entity)) {
-    QJsonObject transformObject;
-    transformObject["x"] = transform->x;
-    transformObject["y"] = transform->y;
-    transformObject["rotation"] = transform->rotation;
-    transformObject["sx"] = transform->sx;
-    transformObject["sy"] = transform->sy;
-    entityObject["TransformComponent"] = transformObject;
-  }
-  if (auto *material = m_scene.reg.get<MaterialComponent>(m_entity)) {
-    QJsonObject materialObject;
-    materialObject["color"] = (qint64)material->color;
-    materialObject["isFilled"] = material->isFilled;
-    materialObject["isStroked"] = material->isStroked;
-    materialObject["strokeWidth"] = material->strokeWidth;
-    materialObject["antiAliased"] = material->antiAliased;
-    entityObject["MaterialComponent"] = materialObject;
-  }
-  if (auto *animation = m_scene.reg.get<AnimationComponent>(m_entity)) {
-    QJsonObject animationObject;
-    animationObject["entryTime"] = animation->entryTime;
-    animationObject["exitTime"] = animation->exitTime;
-    entityObject["AnimationComponent"] = animationObject;
-  }
-  if (auto *script = m_scene.reg.get<ScriptComponent>(m_entity)) {
-    QJsonObject scriptObject;
-    scriptObject["scriptPath"] = script->scriptPath.c_str();
-    scriptObject["startFunction"] = script->startFunction.c_str();
-    scriptObject["updateFunction"] = script->updateFunction.c_str();
-    scriptObject["destroyFunction"] = script->destroyFunction.c_str();
-    entityObject["ScriptComponent"] = scriptObject;
-  }
-  if (m_scene.reg.has<SceneBackgroundComponent>(m_entity)) {
-    entityObject["SceneBackgroundComponent"] = true;
-  }
-  if (auto *shape = m_scene.reg.get<ShapeComponent>(m_entity)) {
-    QJsonObject shapeObject;
-    shapeObject["kind"] = (int)shape->kind;
-    shapeObject["properties"] = shape->getProperties().toJsonObject();
-    entityObject["ShapeComponent"] = shapeObject;
-  }
-  m_entityData = entityObject;
-}
-
-void RemoveEntityCommand::undo() {
-  // Recreate the entity and its components from m_entityData
-  // This assumes the entity ID can be reused or is not critical for undo
-  // If entity ID must be preserved, a more complex mapping is needed.
-  // For simplicity, we'll create a new entity and update m_entity
-  // if this command is redone after an undo.
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  if (m_entity == kInvalidEntity) {
-    m_entity = m_scene.reg.create();
-  }
-
-  if (m_entityData.contains("NameComponent") &&
-      m_entityData["NameComponent"].isString()) {
-    m_scene.reg.emplace<NameComponent>(
-        m_entity,
-        NameComponent{m_entityData["NameComponent"].toString().toStdString()});
-  }
-  if (m_entityData.contains("TransformComponent") &&
-      m_entityData["TransformComponent"].isObject()) {
-    QJsonObject transformObject = m_entityData["TransformComponent"].toObject();
-    m_scene.reg.emplace<TransformComponent>(
-        m_entity,
-        TransformComponent{(float)transformObject["x"].toDouble(),
-                           (float)transformObject["y"].toDouble(),
-                           (float)transformObject["rotation"].toDouble(),
-                           (float)transformObject["sx"].toDouble(),
-                           (float)transformObject["sy"].toDouble()});
-  }
-  if (m_entityData.contains("MaterialComponent") &&
-      m_entityData["MaterialComponent"].isObject()) {
-    QJsonObject materialObject = m_entityData["MaterialComponent"].toObject();
-    m_scene.reg.emplace<MaterialComponent>(
-        m_entity,
-        MaterialComponent{
-            (SkColor)materialObject["color"].toVariant().toULongLong(),
-            materialObject["isFilled"].toBool(),
-            materialObject["isStroked"].toBool(),
-            (float)materialObject["strokeWidth"].toDouble(),
-            materialObject["antiAliased"].toBool()});
-  }
-  if (m_entityData.contains("AnimationComponent") &&
-      m_entityData["AnimationComponent"].isObject()) {
-    QJsonObject animationObject = m_entityData["AnimationComponent"].toObject();
-    m_scene.reg.emplace<AnimationComponent>(
-        m_entity,
-        AnimationComponent{(float)animationObject["entryTime"].toDouble(),
-                           (float)animationObject["exitTime"].toDouble()});
-  }
-  if (m_entityData.contains("ScriptComponent") &&
-      m_entityData["ScriptComponent"].isObject()) {
-    QJsonObject scriptObject = m_entityData["ScriptComponent"].toObject();
-    m_scene.reg.emplace<ScriptComponent>(
-        m_entity,
-        ScriptComponent{
-            scriptObject["scriptPath"].toString().toStdString(),
-            scriptObject["startFunction"].toString().toStdString(),
-            scriptObject["updateFunction"].toString().toStdString(),
-            scriptObject["destroyFunction"].toString().toStdString()});
-  }
-  if (m_entityData.contains("SceneBackgroundComponent") &&
-      m_entityData["SceneBackgroundComponent"].toBool()) {
-    m_scene.reg.emplace<SceneBackgroundComponent>(m_entity);
-  }
-  if (m_entityData.contains("ShapeComponent") &&
-      m_entityData["ShapeComponent"].isObject()) {
-    QJsonObject shapeObject = m_entityData["ShapeComponent"].toObject();
-    ShapeComponent::Kind kind =
-        (ShapeComponent::Kind)shapeObject["kind"].toInt();
-    ShapeComponent shapeComp{kind, std::monostate{}};
-
-    if (shapeObject.contains("properties") &&
-        shapeObject["properties"].isObject()) {
-      QJsonObject propsObject = shapeObject["properties"].toObject();
-      switch (kind) {
-      case ShapeComponent::Kind::Rectangle: {
-        RectangleProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Circle: {
-        CircleProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      }
-    } else {
-      // If properties are empty or missing, initialize with defaults
-      // based on kind
-      if (kind == ShapeComponent::Kind::Rectangle) {
-        shapeComp.properties.emplace<RectangleProperties>();
-      } else if (kind == ShapeComponent::Kind::Circle) {
-        shapeComp.properties.emplace<CircleProperties>();
-      }
-    }
-    m_scene.reg.emplace<ShapeComponent>(m_entity, shapeComp);
-  }
-  m_mainWindow->sceneModel()->refresh();
-  m_mainWindow->canvas()->update();
 }
 
 void RemoveEntityCommand::redo() {
   m_mainWindow->canvas()->scene().reg.destroy(m_entity);
-  m_entity = kInvalidEntity; // Invalidate entity ID after destruction
+  m_mainWindow->sceneModel()->refresh();
+  m_mainWindow->canvas()->update();
+}
+
+void RemoveEntityCommand::undo() {
+  auto &scene = m_mainWindow->canvas()->scene();
+  restoreInto(scene, m_entity, m_entityData);
+
+  m_mainWindow->sceneModel()->refresh();
+  m_mainWindow->canvas()->update();
+}
+
+void destroyList(Scene &scene, const QList<Entity> &list) {
+  for (Entity e : list)
+    scene.reg.destroy(e);
+}
+
+QList<Entity> recreateList(Scene &scene, const QList<QJsonObject> &jsons) {
+  QList<Entity> out;
+  out.reserve(jsons.size());
+  for (const auto &j : jsons)
+    out.append(createFrom(scene, j));
+  return out;
+}
+
+CutCommand::CutCommand(MainWindow *w, const QList<Entity> &sel, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entities(sel) {
+  setText(QObject::tr("Cut Entities"));
+  auto &scene = w->canvas()->scene();
+  for (Entity e : sel)
+    m_entitiesData.append(snapshotEntity(scene, e));
+}
+
+void CutCommand::redo() {
+  destroyList(m_mainWindow->canvas()->scene(), m_entities);
+  m_entities.clear();
+  m_mainWindow->sceneModel()->refresh();
+  m_mainWindow->canvas()->update();
+}
+
+void CutCommand::undo() {
+  m_entities = recreateList(m_mainWindow->canvas()->scene(), m_entitiesData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
@@ -396,362 +141,27 @@ void MoveEntityCommand::redo() {
   }
 }
 
-// CutCommand
-CutCommand::CutCommand(MainWindow *window, const QList<Entity> &entities,
-                       QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entities(entities) {
-  setText(QObject::tr("Cut Entities"));
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  for (Entity e : m_entities) {
-    QJsonObject entityObject;
-    // Serialize entity data
-    if (auto *name = m_scene.reg.get<NameComponent>(e)) {
-      entityObject["NameComponent"] = name->name.c_str();
-    }
-    if (auto *transform = m_scene.reg.get<TransformComponent>(e)) {
-      QJsonObject transformObject;
-      transformObject["x"] = transform->x;
-      transformObject["y"] = transform->y;
-      transformObject["rotation"] = transform->rotation;
-      transformObject["sx"] = transform->sx;
-      transformObject["sy"] = transform->sy;
-      entityObject["TransformComponent"] = transformObject;
-    }
-    if (auto *material = m_scene.reg.get<MaterialComponent>(e)) {
-      QJsonObject materialObject;
-      materialObject["color"] = (qint64)material->color;
-      materialObject["isFilled"] = material->isFilled;
-      materialObject["isStroked"] = material->isStroked;
-      materialObject["strokeWidth"] = material->strokeWidth;
-      materialObject["antiAliased"] = material->antiAliased;
-      entityObject["MaterialComponent"] = materialObject;
-    }
-    if (auto *animation = m_scene.reg.get<AnimationComponent>(e)) {
-      QJsonObject animationObject;
-      animationObject["entryTime"] = animation->entryTime;
-      animationObject["exitTime"] = animation->exitTime;
-      entityObject["AnimationComponent"] = animationObject;
-    }
-    if (auto *script = m_scene.reg.get<ScriptComponent>(e)) {
-      QJsonObject scriptObject;
-      scriptObject["scriptPath"] = script->scriptPath.c_str();
-      scriptObject["startFunction"] = script->startFunction.c_str();
-      scriptObject["updateFunction"] = script->updateFunction.c_str();
-      scriptObject["destroyFunction"] = script->destroyFunction.c_str();
-      entityObject["ScriptComponent"] = scriptObject;
-    }
-    if (m_scene.reg.has<SceneBackgroundComponent>(e)) {
-      entityObject["SceneBackgroundComponent"] = true;
-    }
-    if (auto *shape = m_scene.reg.get<ShapeComponent>(e)) {
-      QJsonObject shapeObject;
-      shapeObject["kind"] = (int)shape->kind;
-      shapeObject["properties"] = shape->getProperties().toJsonObject();
-      entityObject["ShapeComponent"] = shapeObject;
-    }
-    m_entitiesData.append(entityObject);
-  }
-}
-
-void CutCommand::undo() {
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  m_entities.clear(); // Clear existing entities as they will be recreated
-  for (const QJsonObject &entityData : m_entitiesData) {
-    Entity newEntity = m_scene.reg.create();
-    if (entityData.contains("NameComponent") &&
-        entityData["NameComponent"].isString()) {
-      m_scene.reg.emplace<NameComponent>(
-          newEntity,
-          NameComponent{entityData["NameComponent"].toString().toStdString()});
-    }
-    if (entityData.contains("TransformComponent") &&
-        entityData["TransformComponent"].isObject()) {
-      QJsonObject transformObject = entityData["TransformComponent"].toObject();
-      m_scene.reg.emplace<TransformComponent>(
-          newEntity,
-          TransformComponent{(float)transformObject["x"].toDouble(),
-                             (float)transformObject["y"].toDouble(),
-                             (float)transformObject["rotation"].toDouble(),
-                             (float)transformObject["sx"].toDouble(),
-                             (float)transformObject["sy"].toDouble()});
-    }
-    if (entityData.contains("MaterialComponent") &&
-        entityData["MaterialComponent"].isObject()) {
-      QJsonObject materialObject = entityData["MaterialComponent"].toObject();
-      m_scene.reg.emplace<MaterialComponent>(
-          newEntity,
-          MaterialComponent{
-              (SkColor)materialObject["color"].toVariant().toULongLong(),
-              materialObject["isFilled"].toBool(),
-              materialObject["isStroked"].toBool(),
-              (float)materialObject["strokeWidth"].toDouble(),
-              materialObject["antiAliased"].toBool()});
-    }
-    if (entityData.contains("AnimationComponent") &&
-        entityData["AnimationComponent"].isObject()) {
-      QJsonObject animationObject = entityData["AnimationComponent"].toObject();
-      m_scene.reg.emplace<AnimationComponent>(
-          newEntity,
-          AnimationComponent{(float)animationObject["entryTime"].toDouble(),
-                             (float)animationObject["exitTime"].toDouble()});
-    }
-    if (entityData.contains("ScriptComponent") &&
-        entityData["ScriptComponent"].isObject()) {
-      QJsonObject scriptObject = entityData["ScriptComponent"].toObject();
-      m_scene.reg.emplace<ScriptComponent>(
-          newEntity,
-          ScriptComponent{
-              scriptObject["scriptPath"].toString().toStdString(),
-              scriptObject["startFunction"].toString().toStdString(),
-              scriptObject["updateFunction"].toString().toStdString(),
-              scriptObject["destroyFunction"].toString().toStdString()});
-    }
-    if (entityData.contains("SceneBackgroundComponent") &&
-        entityData["SceneBackgroundComponent"].toBool()) {
-      m_scene.reg.emplace<SceneBackgroundComponent>(newEntity);
-    }
-    if (entityData.contains("ShapeComponent") &&
-        entityData["ShapeComponent"].isObject()) {
-      QJsonObject shapeObject = entityData["ShapeComponent"].toObject();
-      ShapeComponent::Kind kind =
-          (ShapeComponent::Kind)shapeObject["kind"].toInt();
-      ShapeComponent shapeComp{kind, std::monostate{}};
-
-      if (shapeObject.contains("properties") &&
-          shapeObject["properties"].isObject()) {
-        QJsonObject propsObject = shapeObject["properties"].toObject();
-        switch (kind) {
-        case ShapeComponent::Kind::Rectangle: {
-          RectangleProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Circle: {
-          CircleProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        }
-      } else {
-        // If properties are empty or missing, initialize with defaults
-        // based on kind
-        if (kind == ShapeComponent::Kind::Rectangle) {
-          shapeComp.properties.emplace<RectangleProperties>();
-        } else if (kind == ShapeComponent::Kind::Circle) {
-          shapeComp.properties.emplace<CircleProperties>();
-        }
-      }
-      m_scene.reg.emplace<ShapeComponent>(newEntity, shapeComp);
-    }
-    m_entities.append(newEntity); // Add the newly created entity to the list
-  }
-  m_mainWindow->sceneModel()->refresh();
-  m_mainWindow->canvas()->update();
-}
-
-void CutCommand::redo() {
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  for (Entity e : m_entities) {
-    m_scene.reg.destroy(e);
-  }
-  m_mainWindow->sceneModel()->refresh();
-  m_mainWindow->canvas()->update();
-}
-
 // DeleteCommand
-DeleteCommand::DeleteCommand(MainWindow *window, const QList<Entity> &entities,
-                             QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entities(entities) {
+DeleteCommand::DeleteCommand(MainWindow *win, const QList<Entity> &ents,
+                             QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(win), m_entities(ents) {
   setText(QObject::tr("Delete Entities"));
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  for (Entity e : m_entities) {
-    QJsonObject entityObject;
-    // Serialize entity data
-    if (auto *name = m_scene.reg.get<NameComponent>(e)) {
-      entityObject["NameComponent"] = name->name.c_str();
-    }
-    if (auto *transform = m_scene.reg.get<TransformComponent>(e)) {
-      QJsonObject transformObject;
-      transformObject["x"] = transform->x;
-      transformObject["y"] = transform->y;
-      transformObject["rotation"] = transform->rotation;
-      transformObject["sx"] = transform->sx;
-      transformObject["sy"] = transform->sy;
-      entityObject["TransformComponent"] = transformObject;
-    }
-    if (auto *material = m_scene.reg.get<MaterialComponent>(e)) {
-      QJsonObject materialObject;
-      materialObject["color"] = (qint64)material->color;
-      materialObject["isFilled"] = material->isFilled;
-      materialObject["isStroked"] = material->isStroked;
-      materialObject["strokeWidth"] = material->strokeWidth;
-      materialObject["antiAliased"] = material->antiAliased;
-      entityObject["MaterialComponent"] = materialObject;
-    }
-    if (auto *animation = m_scene.reg.get<AnimationComponent>(e)) {
-      QJsonObject animationObject;
-      animationObject["entryTime"] = animation->entryTime;
-      animationObject["exitTime"] = animation->exitTime;
-      entityObject["AnimationComponent"] = animationObject;
-    }
-    if (auto *script = m_scene.reg.get<ScriptComponent>(e)) {
-      QJsonObject scriptObject;
-      scriptObject["scriptPath"] = script->scriptPath.c_str();
-      scriptObject["startFunction"] = script->startFunction.c_str();
-      scriptObject["updateFunction"] = script->updateFunction.c_str();
-      scriptObject["destroyFunction"] = script->destroyFunction.c_str();
-      entityObject["ScriptComponent"] = scriptObject;
-    }
-    if (m_scene.reg.has<SceneBackgroundComponent>(e)) {
-      entityObject["SceneBackgroundComponent"] = true;
-    }
-    if (auto *shape = m_scene.reg.get<ShapeComponent>(e)) {
-      QJsonObject shapeObject;
-      shapeObject["kind"] = (int)shape->kind;
-      shapeObject["properties"] = shape->getProperties().toJsonObject();
-      entityObject["ShapeComponent"] = shapeObject;
-    }
-    m_entitiesData.append(entityObject);
-  }
-}
-
-void DeleteCommand::undo() {
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  m_entities.clear(); // Clear existing entities as they will be recreated
-  for (const QJsonObject &entityData : m_entitiesData) {
-    Entity newEntity = m_scene.reg.create();
-    if (entityData.contains("NameComponent") &&
-        entityData["NameComponent"].isString()) {
-      m_scene.reg.emplace<NameComponent>(
-          newEntity,
-          NameComponent{entityData["NameComponent"].toString().toStdString()});
-    }
-    if (entityData.contains("TransformComponent") &&
-        entityData["TransformComponent"].isObject()) {
-      QJsonObject transformObject = entityData["TransformComponent"].toObject();
-      m_scene.reg.emplace<TransformComponent>(
-          newEntity,
-          TransformComponent{(float)transformObject["x"].toDouble(),
-                             (float)transformObject["y"].toDouble(),
-                             (float)transformObject["rotation"].toDouble(),
-                             (float)transformObject["sx"].toDouble(),
-                             (float)transformObject["sy"].toDouble()});
-    }
-    if (entityData.contains("MaterialComponent") &&
-        entityData["MaterialComponent"].isObject()) {
-      QJsonObject materialObject = entityData["MaterialComponent"].toObject();
-      m_scene.reg.emplace<MaterialComponent>(
-          newEntity,
-          MaterialComponent{
-              (SkColor)materialObject["color"].toVariant().toULongLong(),
-              materialObject["isFilled"].toBool(),
-              materialObject["isStroked"].toBool(),
-              (float)materialObject["strokeWidth"].toDouble(),
-              materialObject["antiAliased"].toBool()});
-    }
-    if (entityData.contains("AnimationComponent") &&
-        entityData["AnimationComponent"].isObject()) {
-      QJsonObject animationObject = entityData["AnimationComponent"].toObject();
-      m_scene.reg.emplace<AnimationComponent>(
-          newEntity,
-          AnimationComponent{(float)animationObject["entryTime"].toDouble(),
-                             (float)animationObject["exitTime"].toDouble()});
-    }
-    if (entityData.contains("ScriptComponent") &&
-        entityData["ScriptComponent"].isObject()) {
-      QJsonObject scriptObject = entityData["ScriptComponent"].toObject();
-      m_scene.reg.emplace<ScriptComponent>(
-          newEntity,
-          ScriptComponent{
-              scriptObject["scriptPath"].toString().toStdString(),
-              scriptObject["startFunction"].toString().toStdString(),
-              scriptObject["updateFunction"].toString().toStdString(),
-              scriptObject["destroyFunction"].toString().toStdString()});
-    }
-    if (entityData.contains("SceneBackgroundComponent") &&
-        entityData["SceneBackgroundComponent"].toBool()) {
-      m_scene.reg.emplace<SceneBackgroundComponent>(newEntity);
-    }
-    if (entityData.contains("ShapeComponent") &&
-        entityData["ShapeComponent"].isObject()) {
-      QJsonObject shapeObject = entityData["ShapeComponent"].toObject();
-      ShapeComponent::Kind kind =
-          (ShapeComponent::Kind)shapeObject["kind"].toInt();
-      ShapeComponent shapeComp{kind, std::monostate{}};
-
-      if (shapeObject.contains("properties") &&
-          shapeObject["properties"].isObject()) {
-        QJsonObject propsObject = shapeObject["properties"].toObject();
-        switch (kind) {
-        case ShapeComponent::Kind::Rectangle: {
-          RectangleProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Circle: {
-          CircleProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        }
-      } else {
-        // If properties are empty or missing, initialize with defaults
-        // based on kind
-        if (kind == ShapeComponent::Kind::Rectangle) {
-          shapeComp.properties.emplace<RectangleProperties>();
-        } else if (kind == ShapeComponent::Kind::Circle) {
-          shapeComp.properties.emplace<CircleProperties>();
-        }
-      }
-      m_scene.reg.emplace<ShapeComponent>(newEntity, shapeComp);
-    }
-    m_entities.append(newEntity); // Add the newly created entity to the list
-  }
-  m_mainWindow->sceneModel()->refresh();
-  m_mainWindow->canvas()->update();
+  auto &scene = win->canvas()->scene();
+  for (Entity e : m_entities)
+    m_entitiesData.append(snapshotEntity(scene, e));
 }
 
 void DeleteCommand::redo() {
-  auto &m_scene = m_mainWindow->canvas()->scene();
-  for (Entity e : m_entities) {
-    m_scene.reg.destroy(e);
-  }
+  auto &scene = m_mainWindow->canvas()->scene();
+  destroyList(scene, m_entities);
+  m_entities.clear();
+  m_mainWindow->sceneModel()->refresh();
+  m_mainWindow->canvas()->update();
+}
+
+void DeleteCommand::undo() {
+  auto &scene = m_mainWindow->canvas()->scene();
+  m_entities = recreateList(scene, m_entitiesData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }

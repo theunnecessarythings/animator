@@ -21,6 +21,7 @@ private:
   MainWindow *m_mainWindow;
   Entity m_entity;
   QJsonObject m_entityData; // To store serialized entity data for undo/redo
+  bool m_firstRedo{true};
 };
 
 class RemoveEntityCommand : public QUndoCommand {
@@ -38,7 +39,9 @@ private:
 
 class MoveEntityCommand : public QUndoCommand {
 public:
-  MoveEntityCommand(MainWindow *window, Entity entity, float oldX, float oldY, float oldRotation, float newX, float newY, float newRotation, QUndoCommand *parent = nullptr);
+  MoveEntityCommand(MainWindow *window, Entity entity, float oldX, float oldY,
+                    float oldRotation, float newX, float newY,
+                    float newRotation, QUndoCommand *parent = nullptr);
   void undo() override;
   void redo() override;
 
@@ -172,7 +175,11 @@ private:
 
 class ChangeShapePropertyCommand : public QUndoCommand {
 public:
-  ChangeShapePropertyCommand(MainWindow *window, Entity entity, ShapeComponent::Kind kind, const QJsonObject& oldProperties, const QJsonObject& newProperties, QUndoCommand *parent = nullptr);
+  ChangeShapePropertyCommand(MainWindow *window, Entity entity,
+                             ShapeComponent::Kind kind,
+                             const QJsonObject &oldProperties,
+                             const QJsonObject &newProperties,
+                             QUndoCommand *parent = nullptr);
   void undo() override;
   void redo() override;
 
