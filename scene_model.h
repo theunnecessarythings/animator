@@ -38,7 +38,8 @@ public:
   }
 
   enum SceneModelRoles {
-    ShapePropertiesRole = Qt::UserRole + 1
+    ShapePropertiesRole = Qt::UserRole + 1,
+    ScriptPropertiesRole = Qt::UserRole + 2
   };
 
   QVariant data(const QModelIndex &idx,
@@ -66,6 +67,15 @@ public:
             properties["radius"] = circleProps->radius;
           }
         }
+        return properties;
+      }
+    } else if (role == ScriptPropertiesRole) {
+      if (auto *script = scene_->reg.get<ScriptComponent>(e)) {
+        QVariantMap properties;
+        properties["scriptPath"] = QString::fromStdString(script->scriptPath);
+        properties["startFunction"] = QString::fromStdString(script->startFunction);
+        properties["updateFunction"] = QString::fromStdString(script->updateFunction);
+        properties["destroyFunction"] = QString::fromStdString(script->destroyFunction);
         return properties;
       }
     }

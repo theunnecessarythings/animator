@@ -43,6 +43,12 @@ public:
     setWindowTitle(tr("Skia Animation Studio"));
   }
 
+  SkiaCanvasWidget *canvas() const { return m_canvas; }
+  SceneModel *sceneModel() const { return m_sceneModel; }
+  QTreeView *sceneTree() const { return m_sceneTree; }
+
+  void setInitialRegistry(const Registry &reg) { m_initialRegistry = reg; }
+
 private:
   void createMenus() {
     // --- File -----------------------------------------------------------
@@ -188,6 +194,7 @@ private slots:
     m_playPauseButton->setText("Play");
     m_currentTime = 0.0f;
     m_canvas->setCurrentTime(m_currentTime);
+    resetScene(); // Reset the scene to its initial state
     m_canvas->update();
     m_timelineSlider->setValue(0);
     updateTimeDisplay();
@@ -201,6 +208,9 @@ private slots:
     }
     m_canvas->setCurrentTime(m_currentTime);
     m_canvas->update();
+    m_canvas->scene().scriptSystem.tick(
+        m_animationTimer->interval() / 1000.0f,
+        m_currentTime); // Pass delta time and current time
     m_timelineSlider->setValue(static_cast<int>(m_currentTime * 100));
     updateTimeDisplay();
   }
@@ -801,6 +811,62 @@ private slots:
 
         m_propsLayout->addRow(animationGroup);
       }
+
+      if (auto *c = m_canvas->scene().reg.get<ScriptComponent>(e)) {
+        auto *scriptGroup = new QGroupBox(tr("Script"));
+        auto *scriptLayout = new QFormLayout(scriptGroup);
+
+        QVariantMap scriptProps = m_sceneModel
+                                      ->data(m_sceneModel->indexOfEntity(e),
+                                             SceneModel::ScriptPropertiesRole)
+                                      .toMap();
+
+        auto *scriptPathEdit =
+            new QLineEdit(scriptProps["scriptPath"].toString());
+        connect(scriptPathEdit, &QLineEdit::textChanged,
+                [this, e](const QString &val) {
+                  if (auto *sc =
+                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
+                    sc->scriptPath = val.toStdString();
+                  }
+                });
+        scriptLayout->addRow(tr("Path"), scriptPathEdit);
+
+        auto *startFunctionEdit =
+            new QLineEdit(scriptProps["startFunction"].toString());
+        connect(startFunctionEdit, &QLineEdit::textChanged,
+                [this, e](const QString &val) {
+                  if (auto *sc =
+                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
+                    sc->startFunction = val.toStdString();
+                  }
+                });
+        scriptLayout->addRow(tr("Start Function"), startFunctionEdit);
+
+        auto *updateFunctionEdit =
+            new QLineEdit(scriptProps["updateFunction"].toString());
+        connect(updateFunctionEdit, &QLineEdit::textChanged,
+                [this, e](const QString &val) {
+                  if (auto *sc =
+                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
+                    sc->updateFunction = val.toStdString();
+                  }
+                });
+        scriptLayout->addRow(tr("Update Function"), updateFunctionEdit);
+
+        auto *destroyFunctionEdit =
+            new QLineEdit(scriptProps["destroyFunction"].toString());
+        connect(destroyFunctionEdit, &QLineEdit::textChanged,
+                [this, e](const QString &val) {
+                  if (auto *sc =
+                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
+                    sc->destroyFunction = val.toStdString();
+                  }
+                });
+        scriptLayout->addRow(tr("Destroy Function"), destroyFunctionEdit);
+
+        m_propsLayout->addRow(scriptGroup);
+      }
     }
   }
 private slots:
@@ -850,10 +916,24 @@ private:
     }
   }
 
+  void resetScene() {
+    m_canvas->scene().reg = m_initialRegistry; // Copy back the initial state
+    m_sceneModel->refresh(); // Refresh the model to reflect changes
+    // Re-select the entity to update properties panel if needed
+    if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty()) {
+      Entity currentSelectedEntity = m_sceneModel->getEntity(
+          m_sceneTree->selectionModel()->selectedIndexes().first());
+      onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                              QItemSelection());
+    }
+  }
+
   SkiaCanvasWidget *m_canvas = nullptr;
   SceneModel *m_sceneModel = nullptr;
   QTreeView *m_sceneTree = nullptr;
   QFormLayout *m_propsLayout = nullptr;
+
+  Registry m_initialRegistry; // Store the initial state of the registry
 
   QPushButton *m_playPauseButton = nullptr;
   QPushButton *m_stopResetButton = nullptr;

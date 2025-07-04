@@ -15,6 +15,26 @@ int main(int argc, char **argv) {
 
   MainWindow w;
   w.resize(1024, 768);
+
+  // Create a circle and assign the bouncing_ball script
+  Entity circleEntity =
+      w.canvas()->scene().createShape(ShapeComponent::Kind::Circle, 100, 100);
+  if (auto *script =
+          w.canvas()->scene().reg.get<ScriptComponent>(circleEntity)) {
+    script->scriptPath = "../scripts/bouncing_ball.lua";
+  }
+
+  // Refresh the scene model and select the newly created entity
+  w.sceneModel()->refresh();
+  QModelIndex circleIndex = w.sceneModel()->indexOfEntity(circleEntity);
+  if (circleIndex.isValid()) {
+    w.sceneTree()->selectionModel()->select(
+        circleIndex, QItemSelectionModel::ClearAndSelect);
+  }
+
+  // Capture the initial state of the registry
+  w.setInitialRegistry(w.canvas()->scene().reg);
+
   w.show();
 
   return app.exec();

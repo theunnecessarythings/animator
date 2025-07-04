@@ -21,14 +21,17 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include <QCoreApplication>
 #include <QMetaType>
 #include <QObject>
 #include <QVariant>
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <memory>
+#include <sol/sol.hpp>
 #include <string>
 #include <typeindex>
 #include <unordered_map>
@@ -49,6 +52,7 @@ class IComponentStorage {
 public:
   virtual ~IComponentStorage() = default;
   virtual void remove(Entity e) = 0;
+  virtual std::shared_ptr<IComponentStorage> clone() const = 0;
 };
 
 template <class T> class ComponentStorage final : public IComponentStorage {
@@ -68,6 +72,10 @@ public:
 
   void remove(Entity e) override { data_.erase(e); }
 
+  std::shared_ptr<IComponentStorage> clone() const override {
+    return std::make_shared<ComponentStorage<T>>(*this);
+  }
+
   auto begin() { return data_.begin(); }
   auto end() { return data_.end(); }
 
@@ -80,17 +88,42 @@ private:
 // ----------------------------------------------------------------------------
 class Registry {
 public:
+  Registry() = default;
+  Registry(const Registry &other) : next_(other.next_) {
+    for (const auto &pair : other.pools_) {
+      pools_.emplace(pair.first, pair.second->clone());
+    }
+  }
+
+  Registry &operator=(const Registry &other) {
+    if (this != &other) { // Prevent self-assignment
+      pools_.clear();     // Clear current pools
+      for (const auto &pair : other.pools_) {
+        pools_.emplace(pair.first, pair.second->clone()); // Deep copy
+      }
+      next_ = other.next_;
+    }
+    return *this;
+  }
+
   Entity create() { return next_++; }
   void destroy(Entity e) {
+    // Notify ScriptSystem before removing components
+    if (scriptDestroyCallback) {
+      scriptDestroyCallback(e);
+    }
     for (auto &[_, stor] : pools_)
       stor->remove(e);
   }
+
+  // Callback for ScriptSystem to hook into entity destruction
+  std::function<void(Entity)> scriptDestroyCallback;
 
   template <class T> ComponentStorage<T> &storage() {
     const std::type_index idx = typeid(T);
     auto it = pools_.find(idx);
     if (it == pools_.end()) {
-      auto ptr = std::make_unique<ComponentStorage<T>>();
+      auto ptr = std::make_shared<ComponentStorage<T>>();
       auto raw = ptr.get();
       pools_.emplace(idx, std::move(ptr));
       return *raw;
@@ -118,7 +151,7 @@ public:
 
 private:
   Entity next_ = 1;
-  std::unordered_map<std::type_index, std::unique_ptr<IComponentStorage>>
+  std::unordered_map<std::type_index, std::shared_ptr<IComponentStorage>>
       pools_;
 };
 
@@ -246,9 +279,137 @@ struct AnimationComponent {
   float entryTime = 0.0f;
   float exitTime = 5.0f;
 };
+
+struct ScriptComponent {
+  std::string scriptPath;
+  std::string startFunction = "on_start";
+  std::string updateFunction = "on_update";
+  std::string destroyFunction = "on_destroy";
+  sol::table scriptEnv; // Each script gets its own environment/table
+};
 // -----------------------------------------------------------------------------
 //  RenderSystem – draws entities with {Transform, Shape} via Skia
 // -----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+//  ScriptingEngine: Manages Lua runtime and script execution
+// ----------------------------------------------------------------------------
+class ScriptingEngine {
+public:
+  ScriptingEngine(Registry &reg) : lua_(), reg_(reg) {
+    lua_.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
+
+    // Expose C++ types and functions to Lua
+    lua_.new_usertype<TransformComponent>(
+        "TransformComponent", "x", &TransformComponent::x, "y",
+        &TransformComponent::y, "rotation", &TransformComponent::rotation, "sx",
+        &TransformComponent::sx, "sy", &TransformComponent::sy);
+
+    lua_.new_usertype<MaterialComponent>(
+        "MaterialComponent", "color", &MaterialComponent::color, "isFilled",
+        &MaterialComponent::isFilled, "isStroked",
+        &MaterialComponent::isStroked, "strokeWidth",
+        &MaterialComponent::strokeWidth, "antiAliased",
+        &MaterialComponent::antiAliased);
+
+    lua_.new_usertype<Registry>(
+        "Registry", "get_transform",
+        [&](Registry &self, Entity e) {
+          TransformComponent *tc = self.get<TransformComponent>(e);
+          if (!tc) {
+            std::cerr << "DEBUG: reg_.get<TransformComponent> returned nullptr "
+                         "for entity "
+                      << e << std::endl;
+          }
+          return tc;
+        },
+        "get_material",
+        [&](Registry &self, Entity e) {
+          return self.get<MaterialComponent>(e);
+        },
+        "get_script", [&](Entity e) { return reg_.get<ScriptComponent>(e); });
+  }
+
+  sol::table loadScript(const std::string &scriptPath, Entity entity) {
+    try {
+      sol::environment scriptEnv(lua_, sol::create, lua_.globals());
+      scriptEnv["entity_id"] = entity;
+      scriptEnv["registry"] = std::ref(reg_);
+      scriptEnv["print"] =
+          lua_["print"]; // Explicitly add print to the script's environment
+
+      // Construct absolute path for the script
+      QString appDirPath = QCoreApplication::applicationDirPath();
+      QString absoluteScriptPath =
+          appDirPath + "/" + QString::fromStdString(scriptPath);
+
+      sol::state_view luaState(lua_);
+      luaState.script_file(absoluteScriptPath.toStdString(), scriptEnv);
+      return scriptEnv;
+    } catch (const sol::error &e) {
+      std::cerr << "Lua error loading script " << scriptPath << ": " << e.what()
+                << std::endl;
+      return sol::nil;
+    }
+  }
+
+  void callScriptFunction(sol::table &scriptEnv,
+                          const std::string &functionName, float dt = 0.0f,
+                          float currentTime = 0.0f) {
+    if (scriptEnv.valid() && scriptEnv[functionName].valid()) {
+      try {
+        sol::function func = scriptEnv[functionName];
+        func(scriptEnv["entity_id"].get<Entity>(),
+             scriptEnv["registry"].get<Registry &>(), dt, currentTime);
+      } catch (const sol::error &e) {
+        std::cerr << "Lua error in function " << functionName << ": "
+                  << e.what() << std::endl;
+      }
+    }
+  }
+
+private:
+  sol::state lua_;
+  Registry &reg_;
+};
+
+// ----------------------------------------------------------------------------
+//  ScriptSystem: Executes scripts attached to entities
+// ----------------------------------------------------------------------------
+class ScriptSystem {
+public:
+  ScriptSystem(Registry &r, ScriptingEngine &se) : reg_(r), scriptEngine_(se) {
+    reg_.scriptDestroyCallback = [&](Entity e) {
+      auto *script = reg_.get<ScriptComponent>(e);
+      if (script) {
+        scriptEngine_.callScriptFunction(script->scriptEnv,
+                                         script->destroyFunction);
+        // No explicit unload needed for sol2 tables, they are managed by Lua GC
+      }
+    };
+  }
+
+  void tick(float dt, float currentTime) {
+    reg_.each<ScriptComponent>([&](Entity ent, ScriptComponent &script) {
+      if (!script.scriptEnv.valid()) {
+        script.scriptEnv = scriptEngine_.loadScript(script.scriptPath, ent);
+        if (script.scriptEnv.valid()) {
+          scriptEngine_.callScriptFunction(
+              script.scriptEnv, script.startFunction, 0.0f,
+              0.0f); // Pass dummy dt and currentTime for start
+        }
+      }
+      if (script.scriptEnv.valid()) {
+        scriptEngine_.callScriptFunction(
+            script.scriptEnv, script.updateFunction, dt, currentTime);
+      }
+    });
+  }
+
+private:
+  Registry &reg_;
+  ScriptingEngine &scriptEngine_;
+};
 
 class RenderSystem {
 public:
@@ -293,8 +454,7 @@ public:
       case ShapeComponent::Kind::Rectangle: {
         const auto &rectProps =
             std::get<RectangleProperties>(shape->properties);
-        canvas->drawRect(
-            {0, 0, rectProps.width, rectProps.height}, paint);
+        canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
         break;
       }
       case ShapeComponent::Kind::Circle: {
@@ -356,8 +516,12 @@ private:
 // -----------------------------------------------------------------------------
 struct Scene {
   Registry reg;
-  RenderSystem renderer{reg};
+  ScriptingEngine scriptEngine;
+  ScriptSystem scriptSystem;
+  RenderSystem renderer;
   std::map<ShapeComponent::Kind, int> kindCounters;
+
+  Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {}
 
   Entity createShape(ShapeComponent::Kind k, float x, float y) {
     Entity e = reg.create();
@@ -379,7 +543,7 @@ struct Scene {
     reg.emplace<ShapeComponent>(e, shapeComp);
     reg.emplace<MaterialComponent>(e);
     reg.emplace<AnimationComponent>(e);
-    reg.emplace<AnimationComponent>(e);
+    reg.emplace<ScriptComponent>(e);
 
     std::string name = ShapeComponent::toString(k);
     int count = kindCounters[k]++;
