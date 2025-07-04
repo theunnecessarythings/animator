@@ -44,11 +44,47 @@
 #include <variant>
 #include <vector>
 
+template <typename Gadget>
+static void fillFromJson(Gadget &dst, const QJsonObject &src) {
+  const QMetaObject &mo = Gadget::staticMetaObject;
+  for (int i = mo.propertyOffset(); i < mo.propertyCount(); ++i) {
+    QMetaProperty p = mo.property(i);
+    if (src.contains(p.name()))
+      p.writeOnGadget(&dst, src[p.name()].toVariant());
+  }
+}
 // -----------------------------------------------------------------------------
 //  Core types
 // -----------------------------------------------------------------------------
 using Entity = uint32_t;
 static constexpr Entity kInvalidEntity = 0;
+
+struct Scene;
+class ComponentRegistry {
+public:
+  using Fn = std::function<void(Scene &, Entity, const QJsonValue &)>;
+
+  static ComponentRegistry &instance() {
+    static ComponentRegistry inst;
+    return inst;
+  }
+
+  void registerComponent(const QString &key, Fn fn) {
+    map_.insert(key, std::move(fn));
+  }
+
+  // Walk every key in the entity-object and dispatch if we know it
+  void apply(Scene &scene, Entity e, const QJsonObject &json) const {
+    for (auto it = json.constBegin(); it != json.constEnd(); ++it) {
+      auto found = map_.find(it.key());
+      if (found != map_.end())
+        found.value()(scene, e, it.value());
+    }
+  }
+
+private:
+  QHash<QString, Fn> map_;
+};
 
 struct NameComponent {
   std::string name;
@@ -179,7 +215,8 @@ public:
             for (int i = metaObject.propertyOffset();
                  i < metaObject.propertyCount(); ++i) {
               QMetaProperty metaProperty = metaObject.property(i);
-              obj[metaProperty.name()] = QJsonValue::fromVariant(metaProperty.readOnGadget(&arg));
+              obj[metaProperty.name()] =
+                  QJsonValue::fromVariant(metaProperty.readOnGadget(&arg));
             }
             return obj;
           }
@@ -829,201 +866,103 @@ struct Scene {
   }
 
   void deserialize(const QJsonObject &sceneObject) {
-    clear(); // Clear existing scene before deserializing
+    clear(); // wipe current scene
 
-    if (sceneObject.contains("entities") && sceneObject["entities"].isArray()) {
-      QJsonArray entitiesArray = sceneObject["entities"].toArray();
-      for (const QJsonValue &entityValue : entitiesArray) {
-        if (entityValue.isObject()) {
-          QJsonObject entityObject = entityValue.toObject();
-          Entity e = reg.create(); // Create a new entity
+    if (!sceneObject.contains("entities") || !sceneObject["entities"].isArray())
+      return;
 
-          // Deserialize TransformComponent
-          if (entityObject.contains("TransformComponent") &&
-              entityObject["TransformComponent"].isObject()) {
-            QJsonObject transformObject =
-                entityObject["TransformComponent"].toObject();
-            reg.emplace<TransformComponent>(
-                e, TransformComponent{
-                       (float)transformObject["x"].toDouble(),
-                       (float)transformObject["y"].toDouble(),
-                       (float)transformObject["rotation"].toDouble(),
-                       (float)transformObject["sx"].toDouble(),
-                       (float)transformObject["sy"].toDouble()});
-          }
+    const QJsonArray arr = sceneObject["entities"].toArray();
+    for (const QJsonValue &v : arr) {
+      if (!v.isObject())
+        continue;
 
-          // Deserialize NameComponent
-          if (entityObject.contains("NameComponent") &&
-              entityObject["NameComponent"].isString()) {
-            reg.emplace<NameComponent>(
-                e, NameComponent{
-                       entityObject["NameComponent"].toString().toStdString()});
-          }
-
-          // Deserialize MaterialComponent
-          if (entityObject.contains("MaterialComponent") &&
-              entityObject["MaterialComponent"].isObject()) {
-            QJsonObject materialObject =
-                entityObject["MaterialComponent"].toObject();
-            reg.emplace<MaterialComponent>(
-                e,
-                MaterialComponent{
-                    (SkColor)materialObject["color"].toVariant().toULongLong(),
-                    materialObject["isFilled"].toBool(),
-                    materialObject["isStroked"].toBool(),
-                    (float)materialObject["strokeWidth"].toDouble(),
-                    materialObject["antiAliased"].toBool()});
-          }
-
-          // Deserialize AnimationComponent
-          if (entityObject.contains("AnimationComponent") &&
-              entityObject["AnimationComponent"].isObject()) {
-            QJsonObject animationObject =
-                entityObject["AnimationComponent"].toObject();
-            reg.emplace<AnimationComponent>(
-                e, AnimationComponent{
-                       (float)animationObject["entryTime"].toDouble(),
-                       (float)animationObject["exitTime"].toDouble()});
-          }
-
-          // Deserialize ScriptComponent
-          if (entityObject.contains("ScriptComponent") &&
-              entityObject["ScriptComponent"].isObject()) {
-            QJsonObject scriptObject =
-                entityObject["ScriptComponent"].toObject();
-            reg.emplace<ScriptComponent>(
-                e,
-                ScriptComponent{
-                    scriptObject["scriptPath"].toString().toStdString(),
-                    scriptObject["startFunction"].toString().toStdString(),
-                    scriptObject["updateFunction"].toString().toStdString(),
-                    scriptObject["destroyFunction"].toString().toStdString()});
-          }
-
-          // Deserialize SceneBackgroundComponent
-          if (entityObject.contains("SceneBackgroundComponent") &&
-              entityObject["SceneBackgroundComponent"].toBool()) {
-            reg.emplace<SceneBackgroundComponent>(e);
-          }
-
-          // Deserialize ShapeComponent
-          if (entityObject.contains("ShapeComponent") &&
-              entityObject["ShapeComponent"].isObject()) {
-            QJsonObject shapeObject = entityObject["ShapeComponent"].toObject();
-            ShapeComponent::Kind kind =
-                (ShapeComponent::Kind)shapeObject["kind"].toInt();
-            ShapeComponent shapeComp{kind, std::monostate{}};
-
-            if (shapeObject.contains("properties") &&
-                shapeObject["properties"].isObject()) {
-              QJsonObject propsObject = shapeObject["properties"].toObject();
-              switch (kind) {
-              case ShapeComponent::Kind::Rectangle: {
-                RectangleProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              case ShapeComponent::Kind::Circle: {
-                CircleProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              case ShapeComponent::Kind::Line: {
-                LineProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              case ShapeComponent::Kind::Bezier: {
-                BezierProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              case ShapeComponent::Kind::Text: {
-                TextProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              case ShapeComponent::Kind::Image: {
-                ImageProperties props;
-                const QMetaObject &metaObject = props.staticMetaObject;
-                for (int i = metaObject.propertyOffset();
-                     i < metaObject.propertyCount(); ++i) {
-                  QMetaProperty metaProperty = metaObject.property(i);
-                  if (propsObject.contains(metaProperty.name())) {
-                    metaProperty.writeOnGadget(
-                        &props, propsObject[metaProperty.name()].toVariant());
-                  }
-                }
-                shapeComp.properties = props;
-                break;
-              }
-              }
-            } else {
-              // If properties are empty or missing, initialize with defaults
-              // based on kind
-              if (kind == ShapeComponent::Kind::Rectangle) {
-                shapeComp.properties.emplace<RectangleProperties>();
-              } else if (kind == ShapeComponent::Kind::Circle) {
-                shapeComp.properties.emplace<CircleProperties>();
-              } else if (kind == ShapeComponent::Kind::Line) {
-                shapeComp.properties.emplace<LineProperties>();
-              } else if (kind == ShapeComponent::Kind::Bezier) {
-                shapeComp.properties.emplace<BezierProperties>();
-              } else if (kind == ShapeComponent::Kind::Text) {
-                shapeComp.properties.emplace<TextProperties>();
-              } else if (kind == ShapeComponent::Kind::Image) {
-                shapeComp.properties.emplace<ImageProperties>();
-              }
-            }
-            reg.emplace<ShapeComponent>(e, shapeComp);
-          }
-        }
-      }
+      Entity e = reg.create();
+      ComponentRegistry::instance().apply(*this, e, v.toObject());
     }
   }
 };
+
+#define REGISTER_COMPONENT(KEY, ...)                                           \
+  namespace {                                                                  \
+  const bool _registered_##KEY = [] {                                          \
+    ComponentRegistry::instance().registerComponent(QStringLiteral(#KEY),      \
+                                                    __VA_ARGS__);              \
+    return true;                                                               \
+  }();                                                                         \
+  }
+
+REGISTER_COMPONENT(NameComponent, [](Scene &scene, Entity ent,
+                                     const QJsonValue &val) {
+  if (!val.isString())
+    return; // defensive
+  QString base = val.toString();
+  std::string unique = base.toStdString();
+
+  int counter = 1;
+  bool exists = true;
+  while (exists) {
+    exists = false;
+    scene.reg.each<NameComponent>([&](Entity, NameComponent &nc) {
+      if (nc.name == unique)
+        exists = true;
+    });
+    if (exists)
+      unique = base.toStdString() + "." + std::to_string(counter++);
+  }
+  scene.reg.emplace<NameComponent>(ent, NameComponent{unique});
+});
+
+REGISTER_COMPONENT(TransformComponent, [](Scene &scene, Entity ent,
+                                          const QJsonValue &val) {
+  const QJsonObject o = val.toObject();
+  scene.reg.emplace<TransformComponent>(
+      ent, TransformComponent{static_cast<float>(o["x"].toDouble()) + 10.0f,
+                              static_cast<float>(o["y"].toDouble()) + 10.0f,
+                              static_cast<float>(o["rotation"].toDouble()),
+                              static_cast<float>(o["sx"].toDouble()),
+                              static_cast<float>(o["sy"].toDouble())});
+});
+
+REGISTER_COMPONENT(MaterialComponent, [](Scene &scene, Entity ent,
+                                         const QJsonValue &val) {
+  const QJsonObject o = val.toObject();
+  scene.reg.emplace<MaterialComponent>(
+      ent, MaterialComponent{
+               static_cast<SkColor>(o["color"].toVariant().toULongLong()),
+               o["isFilled"].toBool(), o["isStroked"].toBool(),
+               static_cast<float>(o["strokeWidth"].toDouble()),
+               o["antiAliased"].toBool()});
+});
+
+REGISTER_COMPONENT(SceneBackgroundComponent,
+                   [](Scene &scene, Entity ent, const QJsonValue &) {
+                     scene.reg.emplace<SceneBackgroundComponent>(ent);
+                   });
+
+#define SHAPE_CASE(KEY, TYPE)                                                  \
+  case ShapeComponent::Kind::KEY: {                                            \
+    TYPE tmp;                                                                  \
+    fillFromJson(tmp, props);                                                  \
+    sc.properties = tmp;                                                       \
+    break;                                                                     \
+  }
+
+REGISTER_COMPONENT(ShapeComponent, [](Scene &scene, Entity ent,
+                                      const QJsonValue &val) {
+  const QJsonObject root = val.toObject();
+  auto kind = static_cast<ShapeComponent::Kind>(root["kind"].toInt());
+
+  ShapeComponent sc{kind, std::monostate{}};
+  if (root.contains("properties")) {
+    const QJsonObject props = root["properties"].toObject();
+    switch (kind) {
+      SHAPE_CASE(Rectangle, RectangleProperties)
+      SHAPE_CASE(Circle, CircleProperties)
+      SHAPE_CASE(Line, LineProperties)
+      SHAPE_CASE(Bezier, BezierProperties)
+      SHAPE_CASE(Text, TextProperties)
+      SHAPE_CASE(Image, ImageProperties)
+    }
+  }
+  scene.reg.emplace<ShapeComponent>(ent, sc);
+});

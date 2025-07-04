@@ -418,11 +418,9 @@ protected:
         if (initialTransform_.x != tc->x || initialTransform_.y != tc->y ||
             initialTransform_.rotation != tc->rotation ||
             initialTransform_.sx != tc->sx || initialTransform_.sy != tc->sy) {
-          emit transformationCompleted(selectedEntity_,
-                                       initialTransform_.x,
-                                       initialTransform_.y,
-                                       initialTransform_.rotation,
-                                       tc->x, tc->y, tc->rotation);
+          emit transformationCompleted(
+              selectedEntity_, initialTransform_.x, initialTransform_.y,
+              initialTransform_.rotation, tc->x, tc->y, tc->rotation);
         }
       }
     }
@@ -435,7 +433,9 @@ signals:
   void sceneChanged();
   void transformChanged(Entity entity);
   void canvasSelectionChanged(Entity entity);
-  void transformationCompleted(Entity entity, float oldX, float oldY, float oldRotation, float newX, float newY, float newRotation);
+  void transformationCompleted(Entity entity, float oldX, float oldY,
+                               float oldRotation, float newX, float newY,
+                               float newRotation);
 
 private:
   struct TransformData {
