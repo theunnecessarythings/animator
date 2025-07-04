@@ -23,6 +23,6 @@ LIBS += $$SKIA_ROOT/out/Static/libskia.a \
         -lsharpyuv \
         -L/mnt/ubuntu/home/sreeraj/Documents/lua-5.4.8/src \
         /home/sreeraj/ubuntu/Documents/animator/lua-5.4.8/src/liblua.a
-SOURCES       += main.cpp
-HEADERS       += canvas.h window.h toolbox.h ecs.h scene_model.h
+SOURCES       += main.cpp commands.cpp
+HEADERS       += canvas.h window.h toolbox.h ecs.h scene_model.h commands.h
 RESOURCES     += icons.qrc

@@ -22,8 +22,13 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QMetaObject>
+#include <QMetaProperty>
 #include <QMetaType>
 #include <QObject>
+#include <QPropertyAnimation>
 #include <QVariant>
 #include <cassert>
 #include <cstdint>
@@ -45,119 +50,33 @@
 using Entity = uint32_t;
 static constexpr Entity kInvalidEntity = 0;
 
-// ----------------------------------------------------------------------------
-//  Component storage interface (type‑erased)
-// ----------------------------------------------------------------------------
-class IComponentStorage {
-public:
-  virtual ~IComponentStorage() = default;
-  virtual void remove(Entity e) = 0;
-  virtual std::shared_ptr<IComponentStorage> clone() const = 0;
+struct NameComponent {
+  std::string name;
 };
 
-template <class T> class ComponentStorage final : public IComponentStorage {
-public:
-  template <class... Args> T &emplace(Entity e, Args &&...args) {
-    auto [it, ok] = data_.try_emplace(e, std::forward<Args>(args)...);
-    return it->second; // returns existing if already present
-  }
-  bool has(Entity e) const { return data_.count(e) != 0; }
-  T *get(Entity e) {
-    auto it = data_.find(e);
-    return it == data_.end() ? nullptr : &it->second;
-  }
-  const T *get(Entity e) const {
-    return const_cast<ComponentStorage *>(this)->get(e);
-  }
-
-  void remove(Entity e) override { data_.erase(e); }
-
-  std::shared_ptr<IComponentStorage> clone() const override {
-    return std::make_shared<ComponentStorage<T>>(*this);
-  }
-
-  auto begin() { return data_.begin(); }
-  auto end() { return data_.end(); }
-
-private:
-  std::unordered_map<Entity, T> data_;
+struct MaterialComponent {
+  SkColor color = SK_ColorBLUE;
+  bool isFilled = true;
+  bool isStroked = false;
+  float strokeWidth = 1.0f;
+  bool antiAliased = true;
 };
 
-// ----------------------------------------------------------------------------
-//  Registry: central API the editor interacts with
-// ----------------------------------------------------------------------------
-class Registry {
-public:
-  Registry() = default;
-  Registry(const Registry &other) : next_(other.next_) {
-    for (const auto &pair : other.pools_) {
-      pools_.emplace(pair.first, pair.second->clone());
-    }
-  }
-
-  Registry &operator=(const Registry &other) {
-    if (this != &other) { // Prevent self-assignment
-      pools_.clear();     // Clear current pools
-      for (const auto &pair : other.pools_) {
-        pools_.emplace(pair.first, pair.second->clone()); // Deep copy
-      }
-      next_ = other.next_;
-    }
-    return *this;
-  }
-
-  Entity create() { return next_++; }
-  void destroy(Entity e) {
-    // Notify ScriptSystem before removing components
-    if (scriptDestroyCallback) {
-      scriptDestroyCallback(e);
-    }
-    for (auto &[_, stor] : pools_)
-      stor->remove(e);
-  }
-
-  // Callback for ScriptSystem to hook into entity destruction
-  std::function<void(Entity)> scriptDestroyCallback;
-
-  template <class T> ComponentStorage<T> &storage() {
-    const std::type_index idx = typeid(T);
-    auto it = pools_.find(idx);
-    if (it == pools_.end()) {
-      auto ptr = std::make_shared<ComponentStorage<T>>();
-      auto raw = ptr.get();
-      pools_.emplace(idx, std::move(ptr));
-      return *raw;
-    }
-    return *static_cast<ComponentStorage<T> *>(it->second.get());
-  }
-
-  template <class T, class... Args> T &emplace(Entity e, Args &&...args) {
-    return storage<T>().emplace(e, std::forward<Args>(args)...);
-  }
-
-  template <class T> T *get(Entity e) { return storage<T>().get(e); }
-
-  template <class T> bool has(Entity e) const {
-    auto it = pools_.find(std::type_index(typeid(T)));
-    return it != pools_.end() &&
-           static_cast<ComponentStorage<T> *>(it->second.get())->has(e);
-  }
-
-  // Simple view: iterate over all (Entity, T&) pairs.  Extend as needed.
-  template <class T, class F> void each(F &&fn) {
-    for (auto &[e, comp] : storage<T>())
-      fn(e, comp);
-  }
-
-private:
-  Entity next_ = 1;
-  std::unordered_map<std::type_index, std::shared_ptr<IComponentStorage>>
-      pools_;
+struct AnimationComponent {
+  float entryTime = 0.0f;
+  float exitTime = 5.0f;
 };
 
-// -----------------------------------------------------------------------------
-//  Example components – keep it trivial for now
-// -----------------------------------------------------------------------------
+struct ScriptComponent {
+  std::string scriptPath;
+  std::string startFunction = "on_start";
+  std::string updateFunction = "on_update";
+  std::string destroyFunction = "on_destroy";
+  sol::table scriptEnv; // Each script gets its own environment/table
+};
+
+struct SceneBackgroundComponent {}; // Tag component for the background
+
 struct TransformComponent {
   float x = 0.f, y = 0.f;
   float rotation = 0.f;     // radians
@@ -237,12 +156,52 @@ public:
 };
 
 struct ShapeComponent {
+  Q_GADGET
+  Q_PROPERTY(Kind kind MEMBER kind)
+  Q_PROPERTY(QVariant properties READ getProperties WRITE setProperties)
+public:
   enum class Kind { Rectangle, Circle, Line, Bezier, Text, Image };
   Kind kind;
   std::variant<std::monostate, RectangleProperties, CircleProperties,
                LineProperties, BezierProperties, TextProperties,
                ImageProperties>
       properties; // Add other shape properties here as they are defined
+
+  QVariant getProperties() const {
+    return std::visit(
+        [](auto &&arg) -> QVariant {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, std::monostate>) {
+            return QVariant();
+          } else {
+            QJsonObject obj;
+            const QMetaObject metaObject = T::staticMetaObject;
+            for (int i = metaObject.propertyOffset();
+                 i < metaObject.propertyCount(); ++i) {
+              QMetaProperty metaProperty = metaObject.property(i);
+              obj[metaProperty.name()] = QJsonValue::fromVariant(metaProperty.readOnGadget(&arg));
+            }
+            return obj;
+          }
+        },
+        properties);
+  }
+
+  void setProperties(const QVariant &value) {
+    if (value.canConvert<RectangleProperties>()) {
+      properties = value.value<RectangleProperties>();
+    } else if (value.canConvert<CircleProperties>()) {
+      properties = value.value<CircleProperties>();
+    } else if (value.canConvert<LineProperties>()) {
+      properties = value.value<LineProperties>();
+    } else if (value.canConvert<BezierProperties>()) {
+      properties = value.value<BezierProperties>();
+    } else if (value.canConvert<TextProperties>()) {
+      properties = value.value<TextProperties>();
+    } else if (value.canConvert<ImageProperties>()) {
+      properties = value.value<ImageProperties>();
+    }
+  }
 
   static const char *toString(Kind k) {
     switch (k) {
@@ -263,30 +222,146 @@ struct ShapeComponent {
   }
 };
 
-struct NameComponent {
-  std::string name;
+// ----------------------------------------------------------------------------
+//  Component storage interface (type‑erased)
+// ----------------------------------------------------------------------------
+class IComponentStorage {
+public:
+  virtual ~IComponentStorage() = default;
+  virtual void remove(Entity e) = 0;
+  virtual std::shared_ptr<IComponentStorage> clone() const = 0;
 };
 
-struct MaterialComponent {
-  SkColor color = SK_ColorBLACK;
-  bool isFilled = true;
-  bool isStroked = false;
-  float strokeWidth = 1.0f;
-  bool antiAliased = true;
+template <class T> class ComponentStorage final : public IComponentStorage {
+public:
+  template <class... Args> T &emplace(Entity e, Args &&...args) {
+    auto [it, ok] = data_.try_emplace(e, std::forward<Args>(args)...);
+    return it->second; // returns existing if already present
+  }
+  bool has(Entity e) const { return data_.count(e) != 0; }
+  T *get(Entity e) {
+    auto it = data_.find(e);
+    return it == data_.end() ? nullptr : &it->second;
+  }
+  const T *get(Entity e) const {
+    auto it = data_.find(e);
+    return it == data_.end() ? nullptr : &it->second;
+  }
+
+  void remove(Entity e) override { data_.erase(e); }
+
+  std::shared_ptr<IComponentStorage> clone() const override {
+    return std::make_shared<ComponentStorage<T>>(*this);
+  }
+
+  auto begin() { return data_.begin(); }
+  auto end() { return data_.end(); }
+
+  auto begin() const { return data_.cbegin(); }
+  auto end() const { return data_.cend(); }
+
+  auto cbegin() const { return data_.cbegin(); }
+  auto cend() const { return data_.cend(); }
+
+private:
+  std::unordered_map<Entity, T> data_;
 };
 
-struct AnimationComponent {
-  float entryTime = 0.0f;
-  float exitTime = 5.0f;
+// ----------------------------------------------------------------------------
+//  Registry: central API the editor interacts with
+// ----------------------------------------------------------------------------
+class Registry {
+public:
+  Registry() = default;
+  Registry(const Registry &other) : next_(other.next_) {
+    for (const auto &pair : other.pools_) {
+      pools_.emplace(pair.first, pair.second->clone());
+    }
+  }
+
+  Registry &operator=(const Registry &other) {
+    if (this != &other) { // Prevent self-assignment
+      pools_.clear();     // Clear current pools
+      for (const auto &pair : other.pools_) {
+        pools_.emplace(pair.first, pair.second->clone()); // Deep copy
+      }
+      next_ = other.next_;
+    }
+    return *this;
+  }
+
+  Entity create() { return next_++; }
+  void destroy(Entity e) {
+    // Notify ScriptSystem before removing components
+    if (scriptDestroyCallback) {
+      scriptDestroyCallback(e);
+    }
+    for (auto &[_, stor] : pools_)
+      stor->remove(e);
+  }
+
+  // Callback for ScriptSystem to hook into entity destruction
+  std::function<void(Entity)> scriptDestroyCallback;
+
+  template <class T> ComponentStorage<T> &storage() {
+    const std::type_index idx = typeid(T);
+    auto it = pools_.find(idx);
+    if (it == pools_.end()) {
+      auto ptr = std::make_shared<ComponentStorage<T>>();
+      auto raw = ptr.get();
+      pools_.emplace(idx, std::move(ptr));
+      return *raw;
+    }
+    return *static_cast<ComponentStorage<T> *>(it->second.get());
+  }
+
+  template <class T> const ComponentStorage<T> &storage() const {
+    const std::type_index idx = typeid(T);
+    auto it = pools_.find(idx);
+    if (it == pools_.end()) {
+      // This should ideally not happen in a const context if the component is
+      // expected to exist. Or, handle error appropriately.
+      throw std::runtime_error("Attempted to access non-existent component "
+                               "storage in const context.");
+    }
+    return *static_cast<const ComponentStorage<T> *>(it->second.get());
+  }
+
+  template <class T, class... Args> T &emplace(Entity e, Args &&...args) {
+    return storage<T>().emplace(e, std::forward<Args>(args)...);
+  }
+
+  template <class T> T *get(Entity e) { return storage<T>().get(e); }
+  template <class T> const T *get(Entity e) const {
+    return storage<T>().get(e);
+  }
+
+  template <class T> bool has(Entity e) const {
+    auto it = pools_.find(std::type_index(typeid(T)));
+    return it != pools_.end() &&
+           static_cast<ComponentStorage<T> *>(it->second.get())->has(e);
+  }
+
+  // Simple view: iterate over all (Entity, T&) pairs.  Extend as needed.
+  template <class T, class F> void each(F &&fn) {
+    for (auto &[e, comp] : storage<T>())
+      fn(e, comp);
+  }
+
+  template <class T, class F> void each(F &&fn) const {
+    for (auto &[e, comp] : storage<T>())
+      fn(e, comp);
+  }
+
+private:
+  Entity next_ = 1;
+  std::unordered_map<std::type_index, std::shared_ptr<IComponentStorage>>
+      pools_;
 };
 
-struct ScriptComponent {
-  std::string scriptPath;
-  std::string startFunction = "on_start";
-  std::string updateFunction = "on_update";
-  std::string destroyFunction = "on_destroy";
-  sol::table scriptEnv; // Each script gets its own environment/table
-};
+// -----------------------------------------------------------------------------
+//  Example components – keep it trivial for now
+// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 //  RenderSystem – draws entities with {Transform, Shape} via Skia
 // -----------------------------------------------------------------------------
@@ -416,7 +491,105 @@ public:
   explicit RenderSystem(Registry &r) : reg_(r) {}
 
   void render(SkCanvas *canvas, float currentTime) {
+    // Render background entities first
     reg_.each<TransformComponent>([&](Entity ent, TransformComponent &tr) {
+      if (!reg_.has<SceneBackgroundComponent>(ent))
+        return; // Skip if not a background component
+
+      auto *shape = reg_.get<ShapeComponent>(ent);
+      if (!shape)
+        return;
+
+      auto *material = reg_.get<MaterialComponent>(ent);
+      if (!material)
+        return;
+
+      auto *animation = reg_.get<AnimationComponent>(ent);
+      if (animation && (currentTime < animation->entryTime ||
+                        currentTime > animation->exitTime)) {
+        return; // Don't render if outside entry/exit times
+      }
+
+      SkPaint paint;
+      paint.setAntiAlias(material->antiAliased);
+      paint.setColor(material->color);
+      if (material->isFilled && material->isStroked) {
+        paint.setStyle(SkPaint::kStrokeAndFill_Style);
+      } else if (material->isFilled) {
+        paint.setStyle(SkPaint::kFill_Style);
+      } else if (material->isStroked) {
+        paint.setStyle(SkPaint::kStroke_Style);
+      } else {
+        paint.setStyle(SkPaint::kFill_Style);
+      }
+      paint.setStrokeWidth(material->strokeWidth);
+
+      canvas->save();
+      canvas->translate(tr.x, tr.y);
+      canvas->rotate(tr.rotation * 180 / M_PI);
+      canvas->scale(tr.sx, tr.sy);
+
+      switch (shape->kind) {
+      case ShapeComponent::Kind::Rectangle: {
+        const auto &rectProps =
+            std::get<RectangleProperties>(shape->properties);
+        canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
+        break;
+      }
+      case ShapeComponent::Kind::Circle: {
+        const auto &circleProps = std::get<CircleProperties>(shape->properties);
+        canvas->drawCircle(0, 0, circleProps.radius, paint);
+        break;
+      }
+      case ShapeComponent::Kind::Line: {
+        const auto &lineProps = std::get<LineProperties>(shape->properties);
+        canvas->drawLine(lineProps.x1, lineProps.y1, lineProps.x2, lineProps.y2,
+                         paint);
+        break;
+      }
+      case ShapeComponent::Kind::Bezier: {
+        const auto &bezierProps = std::get<BezierProperties>(shape->properties);
+        SkPath path;
+        path.moveTo(bezierProps.x1, bezierProps.y1);
+        path.cubicTo(bezierProps.cx1, bezierProps.cy1, bezierProps.cx2,
+                     bezierProps.cy2, bezierProps.x2, bezierProps.y2);
+        canvas->drawPath(path, paint);
+        break;
+      }
+      case ShapeComponent::Kind::Text: {
+        const auto &textProps = std::get<TextProperties>(shape->properties);
+        SkFont font;
+        font.setSize(textProps.fontSize);
+        // TODO: Set font family using SkFontMgr
+        canvas->drawString(textProps.text.toStdString().c_str(), 0, 0, font,
+                           paint);
+        break;
+      }
+      case ShapeComponent::Kind::Image: {
+        const auto &imageProps = std::get<ImageProperties>(shape->properties);
+        // For simplicity, load image every time. In a real app, cache this.
+        sk_sp<SkData> data =
+            SkData::MakeFromFileName(imageProps.filePath.toStdString().c_str());
+        // if (data) {
+        //   sk_sp<SkImage> image = SkImage::MakeFromEncoded(data);
+        //   if (image) {
+        //     canvas->drawImage(image.get(), 0, 0, &paint);
+        //   }
+        // }
+        break;
+      }
+      default:
+        /* TODO */
+        break;
+      }
+      canvas->restore();
+    });
+
+    // Render other entities
+    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &tr) {
+      if (reg_.has<SceneBackgroundComponent>(ent))
+        return; // Skip if it's a background component (already rendered)
+
       auto *shape = reg_.get<ShapeComponent>(ent);
       if (!shape)
         return;
@@ -521,12 +694,14 @@ struct Scene {
   RenderSystem renderer;
   std::map<ShapeComponent::Kind, int> kindCounters;
 
-  Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {}
+  Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {
+    // Default background creation can be handled by MainWindow on new scene
+  }
 
   Entity createShape(ShapeComponent::Kind k, float x, float y) {
     Entity e = reg.create();
     reg.emplace<TransformComponent>(e, TransformComponent{x, y});
-    ShapeComponent shapeComp{k};
+    ShapeComponent shapeComp{k, std::monostate{}};
     if (k == ShapeComponent::Kind::Rectangle) {
       shapeComp.properties.emplace<RectangleProperties>();
     } else if (k == ShapeComponent::Kind::Circle) {
@@ -553,5 +728,302 @@ struct Scene {
     reg.emplace<NameComponent>(e, NameComponent{name});
 
     return e;
+  }
+
+  Entity createBackground(float width, float height) {
+    Entity e = reg.create();
+    reg.emplace<TransformComponent>(e, TransformComponent{0, 0, 0, 1.0f, 1.0f});
+    ShapeComponent shapeComp{ShapeComponent::Kind::Rectangle, std::monostate{}};
+    shapeComp.properties.emplace<RectangleProperties>(
+        RectangleProperties{width, height});
+    reg.emplace<ShapeComponent>(e, shapeComp);
+    reg.emplace<MaterialComponent>(
+        e, MaterialComponent{SkColorSetARGB(255, 22, 22, 22), true, false, 1.0f,
+                             true});
+    reg.emplace<SceneBackgroundComponent>(e);
+    reg.emplace<NameComponent>(e, NameComponent{"Background"});
+    return e;
+  }
+
+  void clear() {
+    // Destroy all entities
+    std::vector<Entity> entitiesToDestroy;
+    reg.each<TransformComponent>([&](Entity ent, TransformComponent &) {
+      entitiesToDestroy.push_back(ent);
+    });
+    for (Entity ent : entitiesToDestroy) {
+      reg.destroy(ent);
+    }
+    kindCounters.clear();
+  }
+
+  QJsonObject serialize() const {
+    QJsonObject sceneObject;
+    QJsonArray entitiesArray;
+
+    reg.each<TransformComponent>([&](Entity ent, const TransformComponent &tr) {
+      QJsonObject entityObject;
+      entityObject["id"] = (qint64)ent;
+
+      // Serialize TransformComponent
+      QJsonObject transformObject;
+      transformObject["x"] = tr.x;
+      transformObject["y"] = tr.y;
+      transformObject["rotation"] = tr.rotation;
+      transformObject["sx"] = tr.sx;
+      transformObject["sy"] = tr.sy;
+      entityObject["TransformComponent"] = transformObject;
+
+      // Serialize NameComponent
+      if (auto *name = reg.get<NameComponent>(ent)) {
+        entityObject["NameComponent"] = name->name.c_str();
+      }
+
+      // Serialize MaterialComponent
+      if (auto *material = reg.get<MaterialComponent>(ent)) {
+        QJsonObject materialObject;
+        materialObject["color"] = (qint64)material->color;
+        materialObject["isFilled"] = material->isFilled;
+        materialObject["isStroked"] = material->isStroked;
+        materialObject["strokeWidth"] = material->strokeWidth;
+        materialObject["antiAliased"] = material->antiAliased;
+        entityObject["MaterialComponent"] = materialObject;
+      }
+
+      // Serialize AnimationComponent
+      if (auto *animation = reg.get<AnimationComponent>(ent)) {
+        QJsonObject animationObject;
+        animationObject["entryTime"] = animation->entryTime;
+        animationObject["exitTime"] = animation->exitTime;
+        entityObject["AnimationComponent"] = animationObject;
+      }
+
+      // Serialize ScriptComponent
+      if (auto *script = reg.get<ScriptComponent>(ent)) {
+        QJsonObject scriptObject;
+        scriptObject["scriptPath"] = script->scriptPath.c_str();
+        scriptObject["startFunction"] = script->startFunction.c_str();
+        scriptObject["updateFunction"] = script->updateFunction.c_str();
+        scriptObject["destroyFunction"] = script->destroyFunction.c_str();
+        entityObject["ScriptComponent"] = scriptObject;
+      }
+
+      // Serialize SceneBackgroundComponent
+      if (reg.has<SceneBackgroundComponent>(ent)) {
+        entityObject["SceneBackgroundComponent"] = true;
+      }
+
+      // Serialize ShapeComponent
+      if (auto *shape = reg.get<ShapeComponent>(ent)) {
+        QJsonObject shapeObject;
+        shapeObject["kind"] = (int)shape->kind;
+        shapeObject["properties"] = shape->getProperties().toJsonObject();
+        entityObject["ShapeComponent"] = shapeObject;
+      }
+
+      entitiesArray.append(entityObject);
+    });
+
+    sceneObject["entities"] = entitiesArray;
+    return sceneObject;
+  }
+
+  void deserialize(const QJsonObject &sceneObject) {
+    clear(); // Clear existing scene before deserializing
+
+    if (sceneObject.contains("entities") && sceneObject["entities"].isArray()) {
+      QJsonArray entitiesArray = sceneObject["entities"].toArray();
+      for (const QJsonValue &entityValue : entitiesArray) {
+        if (entityValue.isObject()) {
+          QJsonObject entityObject = entityValue.toObject();
+          Entity e = reg.create(); // Create a new entity
+
+          // Deserialize TransformComponent
+          if (entityObject.contains("TransformComponent") &&
+              entityObject["TransformComponent"].isObject()) {
+            QJsonObject transformObject =
+                entityObject["TransformComponent"].toObject();
+            reg.emplace<TransformComponent>(
+                e, TransformComponent{
+                       (float)transformObject["x"].toDouble(),
+                       (float)transformObject["y"].toDouble(),
+                       (float)transformObject["rotation"].toDouble(),
+                       (float)transformObject["sx"].toDouble(),
+                       (float)transformObject["sy"].toDouble()});
+          }
+
+          // Deserialize NameComponent
+          if (entityObject.contains("NameComponent") &&
+              entityObject["NameComponent"].isString()) {
+            reg.emplace<NameComponent>(
+                e, NameComponent{
+                       entityObject["NameComponent"].toString().toStdString()});
+          }
+
+          // Deserialize MaterialComponent
+          if (entityObject.contains("MaterialComponent") &&
+              entityObject["MaterialComponent"].isObject()) {
+            QJsonObject materialObject =
+                entityObject["MaterialComponent"].toObject();
+            reg.emplace<MaterialComponent>(
+                e,
+                MaterialComponent{
+                    (SkColor)materialObject["color"].toVariant().toULongLong(),
+                    materialObject["isFilled"].toBool(),
+                    materialObject["isStroked"].toBool(),
+                    (float)materialObject["strokeWidth"].toDouble(),
+                    materialObject["antiAliased"].toBool()});
+          }
+
+          // Deserialize AnimationComponent
+          if (entityObject.contains("AnimationComponent") &&
+              entityObject["AnimationComponent"].isObject()) {
+            QJsonObject animationObject =
+                entityObject["AnimationComponent"].toObject();
+            reg.emplace<AnimationComponent>(
+                e, AnimationComponent{
+                       (float)animationObject["entryTime"].toDouble(),
+                       (float)animationObject["exitTime"].toDouble()});
+          }
+
+          // Deserialize ScriptComponent
+          if (entityObject.contains("ScriptComponent") &&
+              entityObject["ScriptComponent"].isObject()) {
+            QJsonObject scriptObject =
+                entityObject["ScriptComponent"].toObject();
+            reg.emplace<ScriptComponent>(
+                e,
+                ScriptComponent{
+                    scriptObject["scriptPath"].toString().toStdString(),
+                    scriptObject["startFunction"].toString().toStdString(),
+                    scriptObject["updateFunction"].toString().toStdString(),
+                    scriptObject["destroyFunction"].toString().toStdString()});
+          }
+
+          // Deserialize SceneBackgroundComponent
+          if (entityObject.contains("SceneBackgroundComponent") &&
+              entityObject["SceneBackgroundComponent"].toBool()) {
+            reg.emplace<SceneBackgroundComponent>(e);
+          }
+
+          // Deserialize ShapeComponent
+          if (entityObject.contains("ShapeComponent") &&
+              entityObject["ShapeComponent"].isObject()) {
+            QJsonObject shapeObject = entityObject["ShapeComponent"].toObject();
+            ShapeComponent::Kind kind =
+                (ShapeComponent::Kind)shapeObject["kind"].toInt();
+            ShapeComponent shapeComp{kind, std::monostate{}};
+
+            if (shapeObject.contains("properties") &&
+                shapeObject["properties"].isObject()) {
+              QJsonObject propsObject = shapeObject["properties"].toObject();
+              switch (kind) {
+              case ShapeComponent::Kind::Rectangle: {
+                RectangleProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Circle: {
+                CircleProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Line: {
+                LineProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Bezier: {
+                BezierProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Text: {
+                TextProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Image: {
+                ImageProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              }
+            } else {
+              // If properties are empty or missing, initialize with defaults
+              // based on kind
+              if (kind == ShapeComponent::Kind::Rectangle) {
+                shapeComp.properties.emplace<RectangleProperties>();
+              } else if (kind == ShapeComponent::Kind::Circle) {
+                shapeComp.properties.emplace<CircleProperties>();
+              } else if (kind == ShapeComponent::Kind::Line) {
+                shapeComp.properties.emplace<LineProperties>();
+              } else if (kind == ShapeComponent::Kind::Bezier) {
+                shapeComp.properties.emplace<BezierProperties>();
+              } else if (kind == ShapeComponent::Kind::Text) {
+                shapeComp.properties.emplace<TextProperties>();
+              } else if (kind == ShapeComponent::Kind::Image) {
+                shapeComp.properties.emplace<ImageProperties>();
+              }
+            }
+            reg.emplace<ShapeComponent>(e, shapeComp);
+          }
+        }
+      }
+    }
   }
 };

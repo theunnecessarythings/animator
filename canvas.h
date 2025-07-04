@@ -258,9 +258,15 @@ protected:
     selectedEntity_ = kInvalidEntity;
     isDragging_ = false;
     isRotating_ = false;
+    initialTransform_ = {0, 0, 0, 0, 0}; // Reset initial transform
 
     scene_.reg.each<TransformComponent>([&](Entity ent,
                                             TransformComponent &tr) {
+      // Skip selection if it's a background component
+      if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
+        return;
+      }
+
       SkRect originalBounds;
       if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
         switch (sc->kind) {
@@ -346,6 +352,9 @@ protected:
         selectedEntity_ = ent;
         isRotating_ = true;
         dragStart_ = e->pos();
+        if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
+          initialTransform_ = {tc->x, tc->y, tc->rotation, tc->sx, tc->sy};
+        }
         return;
       }
 
@@ -353,6 +362,9 @@ protected:
         selectedEntity_ = ent;
         isDragging_ = true;
         dragStart_ = e->pos();
+        if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
+          initialTransform_ = {tc->x, tc->y, tc->rotation, tc->sx, tc->sy};
+        }
       }
     });
     emit canvasSelectionChanged(selectedEntity_);
@@ -399,7 +411,21 @@ protected:
     }
   }
 
-  void mouseReleaseEvent(QMouseEvent *e) override {
+  void mouseReleaseEvent(QMouseEvent * /*e*/) override {
+    if (selectedEntity_ != kInvalidEntity && (isDragging_ || isRotating_)) {
+      if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
+        // Emit transformationCompleted only if transform values have changed
+        if (initialTransform_.x != tc->x || initialTransform_.y != tc->y ||
+            initialTransform_.rotation != tc->rotation ||
+            initialTransform_.sx != tc->sx || initialTransform_.sy != tc->sy) {
+          emit transformationCompleted(selectedEntity_,
+                                       initialTransform_.x,
+                                       initialTransform_.y,
+                                       initialTransform_.rotation,
+                                       tc->x, tc->y, tc->rotation);
+        }
+      }
+    }
     isDragging_ = false;
     isRotating_ = false;
     update();
@@ -409,8 +435,13 @@ signals:
   void sceneChanged();
   void transformChanged(Entity entity);
   void canvasSelectionChanged(Entity entity);
+  void transformationCompleted(Entity entity, float oldX, float oldY, float oldRotation, float newX, float newY, float newRotation);
 
 private:
+  struct TransformData {
+    float x, y, rotation, sx, sy;
+  };
+
   sk_sp<GrDirectContext> fContext;
   sk_sp<SkSurface> fSurface;
   sk_sp<const GrGLInterface> iface;
@@ -421,4 +452,5 @@ private:
   bool isRotating_ = false;
   QPointF dragStart_;
   float currentTime_ = 0.0f;
+  TransformData initialTransform_;
 };

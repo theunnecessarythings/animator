@@ -6,6 +6,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QColorDialog>
 #include <QCoreApplication>
 #include <QDockWidget>
@@ -14,6 +15,8 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -22,15 +25,18 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTreeView>
+#include <QUndoStack>
 #include <QVBoxLayout>
 
 #include <QSlider>
 #include <QTimer>
 
+#include "commands.h"
+
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
-  explicit MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
+  explicit MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), m_undoStack(new QUndoStack(this)) {
     m_canvas = new SkiaCanvasWidget(this);
     setCentralWidget(m_canvas);
 
@@ -40,7 +46,7 @@ public:
     createPropertiesDock();
     createTimelineDock();
 
-    setWindowTitle(tr("Skia Animation Studio"));
+    setWindowTitle(tr("Animation Studio"));
   }
 
   SkiaCanvasWidget *canvas() const { return m_canvas; }
@@ -53,20 +59,34 @@ private:
   void createMenus() {
     // --- File -----------------------------------------------------------
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
-    fileMenu->addAction(tr("&New"));
-    fileMenu->addAction(tr("&Open…"));
-    fileMenu->addAction(tr("&Save"));
+    fileMenu->addAction(tr("&New"), this, &MainWindow::onNewFile);
+    fileMenu->addAction(tr("&Open…"), this, &MainWindow::onOpenFile);
+    fileMenu->addAction(tr("&Save"), this, &MainWindow::onSaveFile);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("E&xit"), qApp, &QCoreApplication::quit);
 
     // --- Edit -----------------------------------------------------------
     QMenu *editMenu = menuBar()->addMenu(tr("&Edit"));
-    editMenu->addAction(tr("Undo"));
-    editMenu->addAction(tr("Redo"));
+    QAction *undoAction =
+        editMenu->addAction(tr("&Undo"), m_undoStack, &QUndoStack::undo);
+    undoAction->setShortcut(QKeySequence::Undo);
+    QAction *redoAction =
+        editMenu->addAction(tr("&Redo"), m_undoStack, &QUndoStack::redo);
+    redoAction->setShortcut(QKeySequence::Redo);
     editMenu->addSeparator();
-    editMenu->addAction(tr("Cut"));
-    editMenu->addAction(tr("Copy"));
-    editMenu->addAction(tr("Paste"));
+    QAction *cutAction =
+        editMenu->addAction(tr("Cu&t"), this, &MainWindow::onCut);
+    cutAction->setShortcut(QKeySequence::Cut);
+    QAction *copyAction =
+        editMenu->addAction(tr("&Copy"), this, &MainWindow::onCopy);
+    copyAction->setShortcut(QKeySequence::Copy);
+    QAction *pasteAction =
+        editMenu->addAction(tr("&Paste"), this, &MainWindow::onPaste);
+    pasteAction->setShortcut(QKeySequence::Paste);
+    editMenu->addSeparator();
+    QAction *deleteAction =
+        editMenu->addAction(tr("&Delete"), this, &MainWindow::onDelete);
+    deleteAction->setShortcut(QKeySequence::Delete);
 
     // --- View -----------------------------------------------------------
     QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
@@ -124,6 +144,8 @@ private:
             &MainWindow::onTransformChanged);
     connect(m_canvas, &SkiaCanvasWidget::canvasSelectionChanged, this,
             &MainWindow::onCanvasSelectionChanged);
+    connect(m_canvas, &SkiaCanvasWidget::transformationCompleted, this,
+            &MainWindow::onTransformationCompleted);
   }
 
   void createPropertiesDock() {
@@ -204,6 +226,7 @@ private slots:
     m_currentTime +=
         m_animationTimer->interval() / 1000.0f; // Convert ms to seconds
     if (m_currentTime > m_animationDuration) {
+      resetScene();         // Reset the scene when animation loops
       m_currentTime = 0.0f; // Loop back to start
     }
     m_canvas->setCurrentTime(m_currentTime);
@@ -229,9 +252,10 @@ private slots:
   }
 
   void onSceneSelectionChanged(const QItemSelection &selected,
-                               const QItemSelection &deselected) {
+                               const QItemSelection & /*deselected*/) {
     clearLayout(m_propsLayout);
 
+    m_selectedEntities.clear();
     auto indexes = selected.indexes();
     if (indexes.isEmpty()) {
       m_canvas->setSelectedEntity(kInvalidEntity);
@@ -239,9 +263,17 @@ private slots:
       return;
     }
 
-    Entity e = m_sceneModel->getEntity(indexes.first());
-    m_canvas->setSelectedEntity(e);
+    // For now, only handle the first selected entity for properties panel
+    // Multi-selection for properties will require a different approach
+    Entity firstSelectedEntity = m_sceneModel->getEntity(indexes.first());
+    m_canvas->setSelectedEntity(firstSelectedEntity);
     m_canvas->update();
+
+    for (const auto &index : indexes) {
+      m_selectedEntities.append(m_sceneModel->getEntity(index));
+    }
+
+    Entity e = firstSelectedEntity;
 
     if (auto *c = m_canvas->scene().reg.get<NameComponent>(e)) {
       auto *nameGroup = new QGroupBox(tr("Object"));
@@ -249,12 +281,21 @@ private slots:
       auto *nameEdit = new QLineEdit(QString::fromStdString(c->name));
       nameLayout->addRow(tr("Name"), nameEdit);
       connect(nameEdit, &QLineEdit::textChanged,
-              [this, e](const QString &text) {
-                if (auto *c = m_canvas->scene().reg.get<NameComponent>(e)) {
-                  c->name = text.toStdString();
-                  m_sceneModel->refresh();
+              [this, e, nameEdit, c](const QString &text) {
+                if (nameEdit->property("textChangedByCode").toBool()) return; // Avoid infinite loop
+                std::string oldName = c->name;
+                std::string newName = text.toStdString();
+                if (oldName != newName) {
+                  m_undoStack->push(new ChangeNameCommand(this, e, oldName, newName));
                 }
+                c->name = newName;
+                m_sceneModel->refresh();
               });
+      // Set a property to indicate that the text change is programmatic
+      connect(nameEdit, &QLineEdit::textEdited, [nameEdit](){
+        nameEdit->setProperty("textChangedByCode", false);
+      });
+      nameEdit->setProperty("textChangedByCode", true);
       m_propsLayout->addRow(nameGroup);
     }
 
@@ -274,12 +315,15 @@ private slots:
         widthSpin->setRange(0.1, 10000.0);
         widthSpin->setValue(shapeProps["width"].toFloat());
         connect(widthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *rectProps = std::get_if<RectangleProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       rectProps->width = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -291,12 +335,15 @@ private slots:
         heightSpin->setValue(shapeProps["height"].toFloat());
         connect(heightSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *rectProps = std::get_if<RectangleProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       rectProps->height = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -308,12 +355,15 @@ private slots:
         gridXStepSpin->setValue(shapeProps["grid_xstep"].toFloat());
         connect(gridXStepSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *rectProps = std::get_if<RectangleProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       rectProps->grid_xstep = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -325,12 +375,15 @@ private slots:
         gridYStepSpin->setValue(shapeProps["grid_ystep"].toFloat());
         connect(gridYStepSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *rectProps = std::get_if<RectangleProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       rectProps->grid_ystep = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -343,12 +396,15 @@ private slots:
         radiusSpin->setValue(shapeProps["radius"].toFloat());
         connect(
             radiusSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this, e](double val) {
+            [this, e, c](double val) {
               if (auto *shapeComp =
                       m_canvas->scene().reg.get<ShapeComponent>(e)) {
                 if (auto *circleProps =
                         std::get_if<CircleProperties>(&shapeComp->properties)) {
+                  QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                   circleProps->radius = val;
+                  QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                  m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                   m_canvas->update();
                 }
               }
@@ -359,12 +415,15 @@ private slots:
         x1Spin->setRange(-10000.0, 10000.0);
         x1Spin->setValue(shapeProps["x1"].toFloat());
         connect(x1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *lineProps = std::get_if<LineProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       lineProps->x1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -375,12 +434,15 @@ private slots:
         y1Spin->setRange(-10000.0, 10000.0);
         y1Spin->setValue(shapeProps["y1"].toFloat());
         connect(y1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *lineProps = std::get_if<LineProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       lineProps->y1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -391,12 +453,15 @@ private slots:
         x2Spin->setRange(-10000.0, 10000.0);
         x2Spin->setValue(shapeProps["x2"].toFloat());
         connect(x2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *lineProps = std::get_if<LineProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       lineProps->x2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -407,12 +472,15 @@ private slots:
         y2Spin->setRange(-10000.0, 10000.0);
         y2Spin->setValue(shapeProps["y2"].toFloat());
         connect(y2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *lineProps = std::get_if<LineProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       lineProps->y2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -423,12 +491,15 @@ private slots:
         x1Spin->setRange(-10000.0, 10000.0);
         x1Spin->setValue(shapeProps["x1"].toFloat());
         connect(x1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->x1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -439,12 +510,15 @@ private slots:
         y1Spin->setRange(-10000.0, 10000.0);
         y1Spin->setValue(shapeProps["y1"].toFloat());
         connect(y1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->y1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -455,12 +529,15 @@ private slots:
         cx1Spin->setRange(-10000.0, 10000.0);
         cx1Spin->setValue(shapeProps["cx1"].toFloat());
         connect(cx1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->cx1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -471,12 +548,15 @@ private slots:
         cy1Spin->setRange(-10000.0, 10000.0);
         cy1Spin->setValue(shapeProps["cy1"].toFloat());
         connect(cy1Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->cy1 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -487,12 +567,15 @@ private slots:
         cx2Spin->setRange(-10000.0, 10000.0);
         cx2Spin->setValue(shapeProps["cx2"].toFloat());
         connect(cx2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->cx2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -503,12 +586,15 @@ private slots:
         cy2Spin->setRange(-10000.0, 10000.0);
         cy2Spin->setValue(shapeProps["cy2"].toFloat());
         connect(cy2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->cy2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -519,12 +605,15 @@ private slots:
         x2Spin->setRange(-10000.0, 10000.0);
         x2Spin->setValue(shapeProps["x2"].toFloat());
         connect(x2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->x2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -535,12 +624,15 @@ private slots:
         y2Spin->setRange(-10000.0, 10000.0);
         y2Spin->setValue(shapeProps["y2"].toFloat());
         connect(y2Spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
+                [this, e, c](double val) {
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *bezierProps = std::get_if<BezierProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       bezierProps->y2 = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
@@ -549,16 +641,24 @@ private slots:
       } else if (c->kind == ShapeComponent::Kind::Text) {
         auto *textEdit = new QLineEdit(shapeProps["text"].toString());
         connect(
-            textEdit, &QLineEdit::textChanged, [this, e](const QString &val) {
+            textEdit, &QLineEdit::textChanged, [this, e, c, textEdit](const QString &val) {
+              if (textEdit->property("textChangedByCode").toBool()) return;
               if (auto *shapeComp =
                       m_canvas->scene().reg.get<ShapeComponent>(e)) {
                 if (auto *textProps =
                         std::get_if<TextProperties>(&shapeComp->properties)) {
+                  QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                   textProps->text = val;
+                  QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                  m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                   m_canvas->update();
                 }
               }
             });
+        connect(textEdit, &QLineEdit::textEdited, [textEdit](){
+          textEdit->setProperty("textChangedByCode", false);
+        });
+        textEdit->setProperty("textChangedByCode", true);
         shapeLayout->addRow(tr("Text"), textEdit);
 
         auto *fontSizeSpin = new QDoubleSpinBox();
@@ -566,12 +666,15 @@ private slots:
         fontSizeSpin->setValue(shapeProps["fontSize"].toFloat());
         connect(
             fontSizeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this, e](double val) {
+            [this, e, c](double val) {
               if (auto *shapeComp =
                       m_canvas->scene().reg.get<ShapeComponent>(e)) {
                 if (auto *textProps =
                         std::get_if<TextProperties>(&shapeComp->properties)) {
+                  QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                   textProps->fontSize = val;
+                  QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                  m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                   m_canvas->update();
                 }
               }
@@ -581,30 +684,46 @@ private slots:
         auto *fontFamilyEdit =
             new QLineEdit(shapeProps["fontFamily"].toString());
         connect(fontFamilyEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
+                [this, e, c, fontFamilyEdit](const QString &val) {
+                  if (fontFamilyEdit->property("textChangedByCode").toBool()) return;
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *textProps = std::get_if<TextProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       textProps->fontFamily = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
                 });
+        connect(fontFamilyEdit, &QLineEdit::textEdited, [fontFamilyEdit](){
+          fontFamilyEdit->setProperty("textChangedByCode", false);
+        });
+        fontFamilyEdit->setProperty("textChangedByCode", true);
         shapeLayout->addRow(tr("Font Family"), fontFamilyEdit);
       } else if (c->kind == ShapeComponent::Kind::Image) {
         auto *filePathEdit = new QLineEdit(shapeProps["filePath"].toString());
         connect(filePathEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
+                [this, e, c, filePathEdit](const QString &val) {
+                  if (filePathEdit->property("textChangedByCode").toBool()) return;
                   if (auto *shapeComp =
                           m_canvas->scene().reg.get<ShapeComponent>(e)) {
                     if (auto *imageProps = std::get_if<ImageProperties>(
                             &shapeComp->properties)) {
+                      QJsonObject oldProps = shapeComp->getProperties().toJsonObject();
                       imageProps->filePath = val;
+                      QJsonObject newProps = shapeComp->getProperties().toJsonObject();
+                      m_undoStack->push(new ChangeShapePropertyCommand(this, e, c->kind, oldProps, newProps));
                       m_canvas->update();
                     }
                   }
                 });
+        connect(filePathEdit, &QLineEdit::textEdited, [filePathEdit](){
+          filePathEdit->setProperty("textChangedByCode", false);
+        });
+        filePathEdit->setProperty("textChangedByCode", true);
         shapeLayout->addRow(tr("File Path"), filePathEdit);
 
         auto *browseButton = new QPushButton("Browse...");
@@ -628,24 +747,36 @@ private slots:
         xSpin->setRange(-1000, 1000);
         xSpin->setValue(c->x);
         connect(xSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-                [this, e](int val) {
-                  if (auto *c =
-                          m_canvas->scene().reg.get<TransformComponent>(e)) {
-                    c->x = val;
-                    m_canvas->update();
+                [this, e, c](int val) {
+                  float oldX = c->x;
+                  float oldY = c->y;
+                  float oldRotation = c->rotation;
+                  float oldSx = c->sx;
+                  float oldSy = c->sy;
+                  float newX = val;
+                  if (oldX != newX) {
+                    m_undoStack->push(new ChangeTransformCommand(this, e, oldX, oldY, oldRotation, oldSx, oldSy, newX, oldY, oldRotation, oldSx, oldSy));
                   }
+                  c->x = newX;
+                  m_canvas->update();
                 });
 
         auto *ySpin = new QSpinBox();
         ySpin->setRange(-1000, 1000);
         ySpin->setValue(c->y);
         connect(ySpin, QOverload<int>::of(&QSpinBox::valueChanged),
-                [this, e](int val) {
-                  if (auto *c =
-                          m_canvas->scene().reg.get<TransformComponent>(e)) {
-                    c->y = val;
-                    m_canvas->update();
+                [this, e, c](int val) {
+                  float oldX = c->x;
+                  float oldY = c->y;
+                  float oldRotation = c->rotation;
+                  float oldSx = c->sx;
+                  float oldSy = c->sy;
+                  float newY = val;
+                  if (oldY != newY) {
+                    m_undoStack->push(new ChangeTransformCommand(this, e, oldX, oldY, oldRotation, oldSx, oldSy, oldX, newY, oldRotation, oldSx, oldSy));
                   }
+                  c->y = newY;
+                  m_canvas->update();
                 });
 
         auto *posLayout = new QHBoxLayout();
@@ -658,11 +789,18 @@ private slots:
         rotationSpin->setValue(c->rotation * 180 / M_PI);
         connect(
             rotationSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this, e](double val) {
-              if (auto *c = m_canvas->scene().reg.get<TransformComponent>(e)) {
-                c->rotation = val * M_PI / 180.0;
-                m_canvas->update();
+            [this, e, c](double val) {
+              float oldX = c->x;
+              float oldY = c->y;
+              float oldRotation = c->rotation;
+              float oldSx = c->sx;
+              float oldSy = c->sy;
+              float newRotation = val * M_PI / 180.0;
+              if (oldRotation != newRotation) {
+                m_undoStack->push(new ChangeTransformCommand(this, e, oldX, oldY, oldRotation, oldSx, oldSy, oldX, oldY, newRotation, oldSx, oldSy));
               }
+              c->rotation = newRotation;
+              m_canvas->update();
             });
         transformLayout->addRow(tr("Rotation"), rotationSpin);
 
@@ -670,12 +808,18 @@ private slots:
         sxSpin->setRange(0.01, 100.0);
         sxSpin->setValue(c->sx);
         connect(sxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
-                  if (auto *c =
-                          m_canvas->scene().reg.get<TransformComponent>(e)) {
-                    c->sx = val;
-                    m_canvas->update();
+                [this, e, c](double val) {
+                  float oldX = c->x;
+                  float oldY = c->y;
+                  float oldRotation = c->rotation;
+                  float oldSx = c->sx;
+                  float oldSy = c->sy;
+                  float newSx = val;
+                  if (oldSx != newSx) {
+                    m_undoStack->push(new ChangeTransformCommand(this, e, oldX, oldY, oldRotation, oldSx, oldSy, oldX, oldY, oldRotation, newSx, oldSy));
                   }
+                  c->sx = newSx;
+                  m_canvas->update();
                 });
         transformLayout->addRow(tr("Scale X"), sxSpin);
 
@@ -683,12 +827,18 @@ private slots:
         sySpin->setRange(0.01, 100.0);
         sySpin->setValue(c->sy);
         connect(sySpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
-                  if (auto *c =
-                          m_canvas->scene().reg.get<TransformComponent>(e)) {
-                    c->sy = val;
-                    m_canvas->update();
+                [this, e, c](double val) {
+                  float oldX = c->x;
+                  float oldY = c->y;
+                  float oldRotation = c->rotation;
+                  float oldSx = c->sx;
+                  float oldSy = c->sy;
+                  float newSy = val;
+                  if (oldSy != newSy) {
+                    m_undoStack->push(new ChangeTransformCommand(this, e, oldX, oldY, oldRotation, oldSx, oldSy, oldX, oldY, oldRotation, oldSx, newSy));
                   }
+                  c->sy = newSy;
+                  m_canvas->update();
                 });
         transformLayout->addRow(tr("Scale Y"), sySpin);
         m_propsLayout->addRow(transformGroup);
@@ -705,19 +855,26 @@ private slots:
         colorButton->setAutoFillBackground(true);
         colorButton->setPalette(pal);
         colorButton->update();
-        connect(colorButton, &QPushButton::clicked, [this, e, colorButton]() {
-          QColor initialColor = QColor::fromRgba(
-              m_canvas->scene().reg.get<MaterialComponent>(e)->color);
+        connect(colorButton, &QPushButton::clicked, [this, e, colorButton, c]() {
+          QColor initialColor = QColor::fromRgba(c->color);
           QColor newColor = QColorDialog::getColor(initialColor, this);
           if (newColor.isValid()) {
-            if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-              mc->color = newColor.rgba();
-              QPalette pal = colorButton->palette();
-              pal.setColor(QPalette::Button, newColor);
-              colorButton->setPalette(pal);
-              colorButton->update();
-              m_canvas->update();
+            SkColor oldColor = c->color;
+            bool oldIsFilled = c->isFilled;
+            bool oldIsStroked = c->isStroked;
+            float oldStrokeWidth = c->strokeWidth;
+            bool oldAntiAliased = c->antiAliased;
+
+            SkColor newSkColor = newColor.rgba();
+            if (oldColor != newSkColor) {
+              m_undoStack->push(new ChangeMaterialCommand(this, e, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased, newSkColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased));
             }
+            c->color = newSkColor;
+            QPalette pal = colorButton->palette();
+            pal.setColor(QPalette::Button, newColor);
+            colorButton->setPalette(pal);
+            colorButton->update();
+            m_canvas->update();
           }
         });
         materialLayout->addRow(tr("Color"), colorButton);
@@ -726,11 +883,19 @@ private slots:
         auto *isFilledCheckBox = new QCheckBox();
         isFilledCheckBox->setChecked(c->isFilled);
         connect(
-            isFilledCheckBox, &QCheckBox::stateChanged, [this, e](int state) {
-              if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-                mc->isFilled = state == Qt::Checked;
-                m_canvas->update();
+            isFilledCheckBox, &QCheckBox::stateChanged, [this, e, c](int state) {
+              SkColor oldColor = c->color;
+              bool oldIsFilled = c->isFilled;
+              bool oldIsStroked = c->isStroked;
+              float oldStrokeWidth = c->strokeWidth;
+              bool oldAntiAliased = c->antiAliased;
+
+              bool newIsFilled = state == Qt::Checked;
+              if (oldIsFilled != newIsFilled) {
+                m_undoStack->push(new ChangeMaterialCommand(this, e, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased, oldColor, newIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased));
               }
+              c->isFilled = newIsFilled;
+              m_canvas->update();
             });
         materialLayout->addRow(tr("Filled"), isFilledCheckBox);
 
@@ -738,11 +903,19 @@ private slots:
         auto *isStrokedCheckBox = new QCheckBox();
         isStrokedCheckBox->setChecked(c->isStroked);
         connect(
-            isStrokedCheckBox, &QCheckBox::stateChanged, [this, e](int state) {
-              if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-                mc->isStroked = state == Qt::Checked;
-                m_canvas->update();
+            isStrokedCheckBox, &QCheckBox::stateChanged, [this, e, c](int state) {
+              SkColor oldColor = c->color;
+              bool oldIsFilled = c->isFilled;
+              bool oldIsStroked = c->isStroked;
+              float oldStrokeWidth = c->strokeWidth;
+              bool oldAntiAliased = c->antiAliased;
+
+              bool newIsStroked = state == Qt::Checked;
+              if (oldIsStroked != newIsStroked) {
+                m_undoStack->push(new ChangeMaterialCommand(this, e, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased, oldColor, oldIsFilled, newIsStroked, oldStrokeWidth, oldAntiAliased));
               }
+              c->isStroked = newIsStroked;
+              m_canvas->update();
             });
         materialLayout->addRow(tr("Stroked"), isStrokedCheckBox);
 
@@ -752,12 +925,19 @@ private slots:
         strokeWidthSpinBox->setValue(c->strokeWidth);
         connect(strokeWidthSpinBox,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                [this, e](double val) {
-                  if (auto *mc =
-                          m_canvas->scene().reg.get<MaterialComponent>(e)) {
-                    mc->strokeWidth = val;
-                    m_canvas->update();
+                [this, e, c](double val) {
+                  SkColor oldColor = c->color;
+                  bool oldIsFilled = c->isFilled;
+                  bool oldIsStroked = c->isStroked;
+                  float oldStrokeWidth = c->strokeWidth;
+                  bool oldAntiAliased = c->antiAliased;
+
+                  float newStrokeWidth = val;
+                  if (oldStrokeWidth != newStrokeWidth) {
+                    m_undoStack->push(new ChangeMaterialCommand(this, e, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased, oldColor, oldIsFilled, oldIsStroked, newStrokeWidth, oldAntiAliased));
                   }
+                  c->strokeWidth = newStrokeWidth;
+                  m_canvas->update();
                 });
         materialLayout->addRow(tr("Stroke Width"), strokeWidthSpinBox);
 
@@ -765,12 +945,19 @@ private slots:
         auto *antiAliasedCheckBox = new QCheckBox();
         antiAliasedCheckBox->setChecked(c->antiAliased);
         connect(antiAliasedCheckBox, &QCheckBox::stateChanged,
-                [this, e](int state) {
-                  if (auto *mc =
-                          m_canvas->scene().reg.get<MaterialComponent>(e)) {
-                    mc->antiAliased = state == Qt::Checked;
-                    m_canvas->update();
+                [this, e, c](int state) {
+                  SkColor oldColor = c->color;
+                  bool oldIsFilled = c->isFilled;
+                  bool oldIsStroked = c->isStroked;
+                  float oldStrokeWidth = c->strokeWidth;
+                  bool oldAntiAliased = c->antiAliased;
+
+                  bool newAntiAliased = state == Qt::Checked;
+                  if (oldAntiAliased != newAntiAliased) {
+                    m_undoStack->push(new ChangeMaterialCommand(this, e, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, oldAntiAliased, oldColor, oldIsFilled, oldIsStroked, oldStrokeWidth, newAntiAliased));
                   }
+                  c->antiAliased = newAntiAliased;
+                  m_canvas->update();
                 });
         materialLayout->addRow(tr("Anti-aliased"), antiAliasedCheckBox);
 
@@ -787,11 +974,15 @@ private slots:
         entryTimeSpin->setValue(c->entryTime);
         connect(
             entryTimeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this, e](double val) {
-              if (auto *ac = m_canvas->scene().reg.get<AnimationComponent>(e)) {
-                ac->entryTime = val;
-                m_canvas->update();
+            [this, e, c](double val) {
+              float oldEntryTime = c->entryTime;
+              float oldExitTime = c->exitTime;
+              float newEntryTime = val;
+              if (oldEntryTime != newEntryTime) {
+                m_undoStack->push(new ChangeAnimationCommand(this, e, oldEntryTime, oldExitTime, newEntryTime, oldExitTime));
               }
+              c->entryTime = newEntryTime;
+              m_canvas->update();
             });
         animationLayout->addRow(tr("Entry Time"), entryTimeSpin);
 
@@ -801,11 +992,15 @@ private slots:
         exitTimeSpin->setValue(c->exitTime);
         connect(
             exitTimeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this, e](double val) {
-              if (auto *ac = m_canvas->scene().reg.get<AnimationComponent>(e)) {
-                ac->exitTime = val;
-                m_canvas->update();
+            [this, e, c](double val) {
+              float oldEntryTime = c->entryTime;
+              float oldExitTime = c->exitTime;
+              float newExitTime = val;
+              if (oldExitTime != newExitTime) {
+                m_undoStack->push(new ChangeAnimationCommand(this, e, oldEntryTime, oldExitTime, oldEntryTime, newExitTime));
               }
+              c->exitTime = newExitTime;
+              m_canvas->update();
             });
         animationLayout->addRow(tr("Exit Time"), exitTimeSpin);
 
@@ -824,52 +1019,141 @@ private slots:
         auto *scriptPathEdit =
             new QLineEdit(scriptProps["scriptPath"].toString());
         connect(scriptPathEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
-                  if (auto *sc =
-                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
-                    sc->scriptPath = val.toStdString();
+                [this, e, c, scriptPathEdit](const QString &val) {
+                  if (scriptPathEdit->property("textChangedByCode").toBool()) return;
+                  std::string oldScriptPath = c->scriptPath;
+                  std::string oldStartFunction = c->startFunction;
+                  std::string oldUpdateFunction = c->updateFunction;
+                  std::string oldDestroyFunction = c->destroyFunction;
+                  std::string newScriptPath = val.toStdString();
+                  if (oldScriptPath != newScriptPath) {
+                    m_undoStack->push(new ChangeScriptCommand(this, e, oldScriptPath, oldStartFunction, oldUpdateFunction, oldDestroyFunction, newScriptPath, oldStartFunction, oldUpdateFunction, oldDestroyFunction));
                   }
+                  c->scriptPath = newScriptPath;
                 });
+        connect(scriptPathEdit, &QLineEdit::textEdited, [scriptPathEdit](){
+          scriptPathEdit->setProperty("textChangedByCode", false);
+        });
+        scriptPathEdit->setProperty("textChangedByCode", true);
         scriptLayout->addRow(tr("Path"), scriptPathEdit);
 
         auto *startFunctionEdit =
             new QLineEdit(scriptProps["startFunction"].toString());
         connect(startFunctionEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
-                  if (auto *sc =
-                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
-                    sc->startFunction = val.toStdString();
+                [this, e, c, startFunctionEdit](const QString &val) {
+                  if (startFunctionEdit->property("textChangedByCode").toBool()) return;
+                  std::string oldScriptPath = c->scriptPath;
+                  std::string oldStartFunction = c->startFunction;
+                  std::string oldUpdateFunction = c->updateFunction;
+                  std::string oldDestroyFunction = c->destroyFunction;
+                  std::string newStartFunction = val.toStdString();
+                  if (oldStartFunction != newStartFunction) {
+                    m_undoStack->push(new ChangeScriptCommand(this, e, oldScriptPath, oldStartFunction, oldUpdateFunction, oldDestroyFunction, oldScriptPath, newStartFunction, oldUpdateFunction, oldDestroyFunction));
                   }
+                  c->startFunction = newStartFunction;
                 });
+        connect(startFunctionEdit, &QLineEdit::textEdited, [startFunctionEdit](){
+          startFunctionEdit->setProperty("textChangedByCode", false);
+        });
+        startFunctionEdit->setProperty("textChangedByCode", true);
         scriptLayout->addRow(tr("Start Function"), startFunctionEdit);
 
         auto *updateFunctionEdit =
             new QLineEdit(scriptProps["updateFunction"].toString());
         connect(updateFunctionEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
-                  if (auto *sc =
-                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
-                    sc->updateFunction = val.toStdString();
+                [this, e, c, updateFunctionEdit](const QString &val) {
+                  if (updateFunctionEdit->property("textChangedByCode").toBool()) return;
+                  std::string oldScriptPath = c->scriptPath;
+                  std::string oldStartFunction = c->startFunction;
+                  std::string oldUpdateFunction = c->updateFunction;
+                  std::string oldDestroyFunction = c->destroyFunction;
+                  std::string newUpdateFunction = val.toStdString();
+                  if (oldUpdateFunction != newUpdateFunction) {
+                    m_undoStack->push(new ChangeScriptCommand(this, e, oldScriptPath, oldStartFunction, oldUpdateFunction, oldDestroyFunction, oldScriptPath, oldStartFunction, newUpdateFunction, oldDestroyFunction));
                   }
+                  c->updateFunction = newUpdateFunction;
                 });
+        connect(updateFunctionEdit, &QLineEdit::textEdited, [updateFunctionEdit](){
+          updateFunctionEdit->setProperty("textChangedByCode", false);
+        });
+        updateFunctionEdit->setProperty("textChangedByCode", true);
         scriptLayout->addRow(tr("Update Function"), updateFunctionEdit);
 
         auto *destroyFunctionEdit =
             new QLineEdit(scriptProps["destroyFunction"].toString());
         connect(destroyFunctionEdit, &QLineEdit::textChanged,
-                [this, e](const QString &val) {
-                  if (auto *sc =
-                          m_canvas->scene().reg.get<ScriptComponent>(e)) {
-                    sc->destroyFunction = val.toStdString();
+                [this, e, c, destroyFunctionEdit](const QString &val) {
+                  if (destroyFunctionEdit->property("textChangedByCode").toBool()) return;
+                  std::string oldScriptPath = c->scriptPath;
+                  std::string oldStartFunction = c->startFunction;
+                  std::string oldUpdateFunction = c->updateFunction;
+                  std::string oldDestroyFunction = c->destroyFunction;
+                  std::string newDestroyFunction = val.toStdString();
+                  if (oldDestroyFunction != newDestroyFunction) {
+                    m_undoStack->push(new ChangeScriptCommand(this, e, oldScriptPath, oldStartFunction, oldUpdateFunction, oldDestroyFunction, oldScriptPath, oldStartFunction, oldUpdateFunction, newDestroyFunction));
                   }
+                  c->destroyFunction = newDestroyFunction;
                 });
+        connect(destroyFunctionEdit, &QLineEdit::textEdited, [destroyFunctionEdit](){
+          destroyFunctionEdit->setProperty("textChangedByCode", false);
+        });
+        destroyFunctionEdit->setProperty("textChangedByCode", true);
         scriptLayout->addRow(tr("Destroy Function"), destroyFunctionEdit);
 
         m_propsLayout->addRow(scriptGroup);
       }
     }
   }
+
 private slots:
+  void onNewFile() {
+    m_canvas->scene().clear();
+    m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
+    m_initialRegistry = m_canvas->scene().reg; // Save initial state
+    m_sceneModel->refresh();
+    m_canvas->update();
+  }
+
+  void onOpenFile() {
+    QString filePath = QFileDialog::getOpenFileName(
+        this, tr("Open Scene"), QString(), tr("Scene Files (*.json)"));
+    if (filePath.isEmpty()) {
+      return;
+    }
+
+    QFile loadFile(filePath);
+    if (!loadFile.open(QIODevice::ReadOnly)) {
+      qWarning("Couldn't open save file.");
+      return;
+    }
+
+    QByteArray saveData = loadFile.readAll();
+    QJsonDocument loadDoc(QJsonDocument::fromJson(saveData));
+
+    m_canvas->scene().deserialize(loadDoc.object());
+    m_initialRegistry = m_canvas->scene().reg; // Update initial state
+    m_sceneModel->refresh();
+    m_canvas->update();
+  }
+
+  void onSaveFile() {
+    QString filePath = QFileDialog::getSaveFileName(
+        this, tr("Save Scene"), QString(), tr("Scene Files (*.json)"));
+    if (filePath.isEmpty()) {
+      return;
+    }
+
+    QFile saveFile(filePath);
+    if (!saveFile.open(QIODevice::WriteOnly)) {
+      qWarning("Couldn't open save file.");
+      return;
+    }
+
+    QJsonObject gameObject = m_canvas->scene().serialize();
+    QJsonDocument saveDoc(gameObject);
+    saveFile.write(saveDoc.toJson());
+  }
+
   void onTransformChanged(Entity entity) {
     // Get the currently selected index from the scene tree
     QModelIndexList selectedIndexes =
@@ -887,6 +1171,295 @@ private slots:
     }
   }
 
+  void onCut() {
+    if (m_selectedEntities.isEmpty()) {
+      return;
+    }
+    onCopy(); // Copy selected entities to clipboard
+    m_undoStack->push(new DeleteCommand(this, m_selectedEntities)); // Then delete them
+    m_selectedEntities.clear();
+    m_canvas->setSelectedEntity(kInvalidEntity);
+    m_sceneModel->refresh();
+    m_canvas->update();
+  }
+
+  void onDelete() {
+    if (m_selectedEntities.isEmpty()) {
+      return;
+    }
+    m_undoStack->push(new DeleteCommand(this, m_selectedEntities));
+    m_selectedEntities.clear();
+    m_canvas->setSelectedEntity(kInvalidEntity);
+    m_sceneModel->refresh();
+    m_canvas->update();
+  }
+
+  void onCopy() {
+    if (m_selectedEntities.isEmpty()) {
+      return;
+    }
+    QJsonArray entitiesArray;
+    for (Entity e : m_selectedEntities) {
+      QJsonObject entityObject;
+      // Serialize entity data
+      if (auto *name = m_canvas->scene().reg.get<NameComponent>(e)) {
+        entityObject["NameComponent"] = name->name.c_str();
+      }
+      if (auto *transform = m_canvas->scene().reg.get<TransformComponent>(e)) {
+        QJsonObject transformObject;
+        transformObject["x"] = transform->x;
+        transformObject["y"] = transform->y;
+        transformObject["rotation"] = transform->rotation;
+        transformObject["sx"] = transform->sx;
+        transformObject["sy"] = transform->sy;
+        entityObject["TransformComponent"] = transformObject;
+      }
+      if (auto *material = m_canvas->scene().reg.get<MaterialComponent>(e)) {
+        QJsonObject materialObject;
+        materialObject["color"] = (qint64)material->color;
+        materialObject["isFilled"] = material->isFilled;
+        materialObject["isStroked"] = material->isStroked;
+        materialObject["strokeWidth"] = material->strokeWidth;
+        materialObject["antiAliased"] = material->antiAliased;
+        entityObject["MaterialComponent"] = materialObject;
+      }
+      if (auto *animation = m_canvas->scene().reg.get<AnimationComponent>(e)) {
+        QJsonObject animationObject;
+        animationObject["entryTime"] = animation->entryTime;
+        animationObject["exitTime"] = animation->exitTime;
+        entityObject["AnimationComponent"] = animationObject;
+      }
+      if (auto *script = m_canvas->scene().reg.get<ScriptComponent>(e)) {
+        QJsonObject scriptObject;
+        scriptObject["scriptPath"] = script->scriptPath.c_str();
+        scriptObject["startFunction"] = script->startFunction.c_str();
+        scriptObject["updateFunction"] = script->updateFunction.c_str();
+        scriptObject["destroyFunction"] = script->destroyFunction.c_str();
+        entityObject["ScriptComponent"] = scriptObject;
+      }
+      if (m_canvas->scene().reg.has<SceneBackgroundComponent>(e)) {
+        entityObject["SceneBackgroundComponent"] = true;
+      }
+      if (auto *shape = m_canvas->scene().reg.get<ShapeComponent>(e)) {
+        QJsonObject shapeObject;
+        shapeObject["kind"] = (int)shape->kind;
+        shapeObject["properties"] = shape->getProperties().toJsonObject();
+        entityObject["ShapeComponent"] = shapeObject;
+      }
+      entitiesArray.append(entityObject);
+    }
+    QJsonDocument doc(entitiesArray);
+    QApplication::clipboard()->setText(doc.toJson(QJsonDocument::Compact));
+  }
+
+  void onPaste() {
+    QString jsonString = QApplication::clipboard()->text();
+    QJsonDocument doc = QJsonDocument::fromJson(jsonString.toUtf8());
+
+    if (doc.isArray()) {
+      QJsonArray entitiesArray = doc.array();
+      for (const QJsonValue &entityValue : entitiesArray) {
+        if (entityValue.isObject()) {
+          QJsonObject entityObject = entityValue.toObject();
+          // Create a new entity and deserialize its components
+          Entity newEntity = m_canvas->scene().reg.create();
+
+          if (entityObject.contains("NameComponent") &&
+              entityObject["NameComponent"].isString()) {
+            QString baseName = entityObject["NameComponent"].toString();
+            std::string uniqueName = baseName.toStdString();
+            int counter = 1;
+            bool nameExists = true;
+            while (nameExists) {
+              nameExists = false;
+              m_canvas->scene().reg.each<NameComponent>([&](Entity ent, NameComponent &nameComp) {
+                if (nameComp.name == uniqueName) {
+                  nameExists = true;
+                }
+              });
+              if (nameExists) {
+                uniqueName = baseName.toStdString() + "." + std::to_string(counter++);
+              }
+            }
+            m_canvas->scene().reg.emplace<NameComponent>(
+                newEntity,
+                NameComponent{uniqueName});
+          }
+          if (entityObject.contains("TransformComponent") &&
+              entityObject["TransformComponent"].isObject()) {
+            QJsonObject transformObject =
+                entityObject["TransformComponent"].toObject();
+            m_canvas->scene().reg.emplace<TransformComponent>(
+                newEntity, TransformComponent{
+                               (float)transformObject["x"].toDouble() +
+                                   10, // Offset pasted entities
+                               (float)transformObject["y"].toDouble() +
+                                   10, // Offset pasted entities
+                               (float)transformObject["rotation"].toDouble(),
+                               (float)transformObject["sx"].toDouble(),
+                               (float)transformObject["sy"].toDouble()});
+          }
+          if (entityObject.contains("MaterialComponent") &&
+              entityObject["MaterialComponent"].isObject()) {
+            QJsonObject materialObject =
+                entityObject["MaterialComponent"].toObject();
+            m_canvas->scene().reg.emplace<MaterialComponent>(
+                newEntity,
+                MaterialComponent{
+                    (SkColor)materialObject["color"].toVariant().toULongLong(),
+                    materialObject["isFilled"].toBool(),
+                    materialObject["isStroked"].toBool(),
+                    (float)materialObject["strokeWidth"].toDouble(),
+                    materialObject["antiAliased"].toBool()});
+          }
+          if (entityObject.contains("AnimationComponent") &&
+              entityObject["AnimationComponent"].isObject()) {
+            QJsonObject animationObject =
+                entityObject["AnimationComponent"].toObject();
+            m_canvas->scene().reg.emplace<AnimationComponent>(
+                newEntity, AnimationComponent{
+                               (float)animationObject["entryTime"].toDouble(),
+                               (float)animationObject["exitTime"].toDouble()});
+          }
+          if (entityObject.contains("ScriptComponent") &&
+              entityObject["ScriptComponent"].isObject()) {
+            QJsonObject scriptObject =
+                entityObject["ScriptComponent"].toObject();
+            m_canvas->scene().reg.emplace<ScriptComponent>(
+                newEntity,
+                ScriptComponent{
+                    scriptObject["scriptPath"].toString().toStdString(),
+                    scriptObject["startFunction"].toString().toStdString(),
+                    scriptObject["updateFunction"].toString().toStdString(),
+                    scriptObject["destroyFunction"].toString().toStdString()});
+          }
+          if (entityObject.contains("SceneBackgroundComponent") &&
+              entityObject["SceneBackgroundComponent"].toBool()) {
+            m_canvas->scene().reg.emplace<SceneBackgroundComponent>(newEntity);
+          }
+          if (entityObject.contains("ShapeComponent") &&
+              entityObject["ShapeComponent"].isObject()) {
+            QJsonObject shapeObject = entityObject["ShapeComponent"].toObject();
+            ShapeComponent::Kind kind =
+                (ShapeComponent::Kind)shapeObject["kind"].toInt();
+            ShapeComponent shapeComp{kind, std::monostate{}};
+
+            if (shapeObject.contains("properties") &&
+                shapeObject["properties"].isObject()) {
+              QJsonObject propsObject = shapeObject["properties"].toObject();
+              switch (kind) {
+              case ShapeComponent::Kind::Rectangle: {
+                RectangleProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Circle: {
+                CircleProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Line: {
+                LineProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Bezier: {
+                BezierProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Text: {
+                TextProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              case ShapeComponent::Kind::Image: {
+                ImageProperties props;
+                const QMetaObject &metaObject = props.staticMetaObject;
+                for (int i = metaObject.propertyOffset();
+                     i < metaObject.propertyCount(); ++i) {
+                  QMetaProperty metaProperty = metaObject.property(i);
+                  if (propsObject.contains(metaProperty.name())) {
+                    metaProperty.writeOnGadget(
+                        &props, propsObject[metaProperty.name()].toVariant());
+                  }
+                }
+                shapeComp.properties = props;
+                break;
+              }
+              }
+            } else {
+              // If properties are empty or missing, initialize with defaults
+              // based on kind
+              if (kind == ShapeComponent::Kind::Rectangle) {
+                shapeComp.properties.emplace<RectangleProperties>();
+              } else if (kind == ShapeComponent::Kind::Circle) {
+                shapeComp.properties.emplace<CircleProperties>();
+              } else if (kind == ShapeComponent::Kind::Line) {
+                shapeComp.properties.emplace<LineProperties>();
+              } else if (kind == ShapeComponent::Kind::Bezier) {
+                shapeComp.properties.emplace<BezierProperties>();
+              } else if (kind == ShapeComponent::Kind::Text) {
+                shapeComp.properties.emplace<TextProperties>();
+              } else if (kind == ShapeComponent::Kind::Image) {
+                shapeComp.properties.emplace<ImageProperties>();
+              }
+            }
+            m_canvas->scene().reg.emplace<ShapeComponent>(newEntity, shapeComp);
+          }
+          m_undoStack->push(new AddEntityCommand(this, newEntity));
+        }
+      }
+    }
+    m_sceneModel->refresh();
+    m_canvas->update();
+  }
+
   void onCanvasSelectionChanged(Entity entity) {
     if (entity == kInvalidEntity) {
       m_sceneTree->selectionModel()->clearSelection();
@@ -898,6 +1471,10 @@ private slots:
       m_sceneTree->selectionModel()->select(
           index, QItemSelectionModel::ClearAndSelect);
     }
+  }
+
+  void onTransformationCompleted(Entity entity, float oldX, float oldY, float oldRotation, float newX, float newY, float newRotation) {
+    m_undoStack->push(new MoveEntityCommand(this, entity, oldX, oldY, oldRotation, newX, newY, newRotation));
   }
 
 private:
@@ -940,6 +1517,9 @@ private:
   QLabel *m_timeDisplayLabel = nullptr;
   QSlider *m_timelineSlider = nullptr;
   QTimer *m_animationTimer = nullptr;
+  QUndoStack *m_undoStack = nullptr;
+  QList<Entity>
+      m_selectedEntities; // Track selected entities for cut/copy/paste
   bool m_isPlaying = false;
   float m_currentTime = 0.0f;
   float m_animationDuration = 5.0f; // Default animation duration
