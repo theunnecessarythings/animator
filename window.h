@@ -72,7 +72,7 @@ private slots:
   void onDelete();
   void onCopy();
   void onPaste();
-  void onCanvasSelectionChanged(Entity entity);
+  void onCanvasSelectionChanged(const QList<Entity> &entities);
   void onTransformationCompleted(Entity entity, float oldX, float oldY,
                                  float oldRotation, float newX, float newY,
                                  float newRotation);
@@ -102,8 +102,7 @@ private:
   QSlider *m_timelineSlider = nullptr;
   QTimer *m_animationTimer = nullptr;
   QUndoStack *m_undoStack = nullptr;
-  QList<Entity>
-      m_selectedEntities; // Track selected entities for cut/copy/paste
+  QList<Entity> m_selectedEntities; 
   bool m_isPlaying = false;
   float m_currentTime = 0.0f;
   float m_animationDuration = 5.0f; // Default animation duration

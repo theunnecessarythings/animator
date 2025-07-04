@@ -167,62 +167,6 @@ void AddEntityCommand::redo() {
         shapeComp.properties = props;
         break;
       }
-      case ShapeComponent::Kind::Line: {
-        LineProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Bezier: {
-        BezierProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Text: {
-        TextProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Image: {
-        ImageProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
       }
     } else {
       // If properties are empty or missing, initialize with defaults
@@ -231,14 +175,6 @@ void AddEntityCommand::redo() {
         shapeComp.properties.emplace<RectangleProperties>();
       } else if (kind == ShapeComponent::Kind::Circle) {
         shapeComp.properties.emplace<CircleProperties>();
-      } else if (kind == ShapeComponent::Kind::Line) {
-        shapeComp.properties.emplace<LineProperties>();
-      } else if (kind == ShapeComponent::Kind::Bezier) {
-        shapeComp.properties.emplace<BezierProperties>();
-      } else if (kind == ShapeComponent::Kind::Text) {
-        shapeComp.properties.emplace<TextProperties>();
-      } else if (kind == ShapeComponent::Kind::Image) {
-        shapeComp.properties.emplace<ImageProperties>();
       }
     }
     m_scene.reg.emplace<ShapeComponent>(m_entity, shapeComp);
@@ -404,62 +340,6 @@ void RemoveEntityCommand::undo() {
         shapeComp.properties = props;
         break;
       }
-      case ShapeComponent::Kind::Line: {
-        LineProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Bezier: {
-        BezierProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Text: {
-        TextProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
-      case ShapeComponent::Kind::Image: {
-        ImageProperties props;
-        const QMetaObject &metaObject = props.staticMetaObject;
-        for (int i = metaObject.propertyOffset();
-             i < metaObject.propertyCount(); ++i) {
-          QMetaProperty metaProperty = metaObject.property(i);
-          if (propsObject.contains(metaProperty.name())) {
-            metaProperty.writeOnGadget(
-                &props, propsObject[metaProperty.name()].toVariant());
-          }
-        }
-        shapeComp.properties = props;
-        break;
-      }
       }
     } else {
       // If properties are empty or missing, initialize with defaults
@@ -468,14 +348,6 @@ void RemoveEntityCommand::undo() {
         shapeComp.properties.emplace<RectangleProperties>();
       } else if (kind == ShapeComponent::Kind::Circle) {
         shapeComp.properties.emplace<CircleProperties>();
-      } else if (kind == ShapeComponent::Kind::Line) {
-        shapeComp.properties.emplace<LineProperties>();
-      } else if (kind == ShapeComponent::Kind::Bezier) {
-        shapeComp.properties.emplace<BezierProperties>();
-      } else if (kind == ShapeComponent::Kind::Text) {
-        shapeComp.properties.emplace<TextProperties>();
-      } else if (kind == ShapeComponent::Kind::Image) {
-        shapeComp.properties.emplace<ImageProperties>();
       }
     }
     m_scene.reg.emplace<ShapeComponent>(m_entity, shapeComp);
@@ -494,10 +366,11 @@ void RemoveEntityCommand::redo() {
 // MoveEntityCommand
 MoveEntityCommand::MoveEntityCommand(MainWindow *mainWindow, Entity entity,
                                      float oldX, float oldY, float oldRotation,
-                                     float newX, float newY, float newRotation, QUndoCommand *parent)
+                                     float newX, float newY, float newRotation,
+                                     QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(mainWindow), m_entity(entity),
-      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation),
-      m_newX(newX), m_newY(newY), m_newRotation(newRotation) {
+      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation), m_newX(newX),
+      m_newY(newY), m_newRotation(newRotation) {
   setText(QObject::tr("Move Entity"));
 }
 
@@ -524,7 +397,8 @@ void MoveEntityCommand::redo() {
 }
 
 // CutCommand
-CutCommand::CutCommand(MainWindow *window, const QList<Entity>& entities, QUndoCommand *parent)
+CutCommand::CutCommand(MainWindow *window, const QList<Entity> &entities,
+                       QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entities(entities) {
   setText(QObject::tr("Cut Entities"));
   auto &m_scene = m_mainWindow->canvas()->scene();
@@ -582,7 +456,7 @@ CutCommand::CutCommand(MainWindow *window, const QList<Entity>& entities, QUndoC
 void CutCommand::undo() {
   auto &m_scene = m_mainWindow->canvas()->scene();
   m_entities.clear(); // Clear existing entities as they will be recreated
-  for (const QJsonObject& entityData : m_entitiesData) {
+  for (const QJsonObject &entityData : m_entitiesData) {
     Entity newEntity = m_scene.reg.create();
     if (entityData.contains("NameComponent") &&
         entityData["NameComponent"].isString()) {
@@ -675,62 +549,6 @@ void CutCommand::undo() {
           shapeComp.properties = props;
           break;
         }
-        case ShapeComponent::Kind::Line: {
-          LineProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Bezier: {
-          BezierProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Text: {
-          TextProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Image: {
-          ImageProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
         }
       } else {
         // If properties are empty or missing, initialize with defaults
@@ -739,14 +557,6 @@ void CutCommand::undo() {
           shapeComp.properties.emplace<RectangleProperties>();
         } else if (kind == ShapeComponent::Kind::Circle) {
           shapeComp.properties.emplace<CircleProperties>();
-        } else if (kind == ShapeComponent::Kind::Line) {
-          shapeComp.properties.emplace<LineProperties>();
-        } else if (kind == ShapeComponent::Kind::Bezier) {
-          shapeComp.properties.emplace<BezierProperties>();
-        } else if (kind == ShapeComponent::Kind::Text) {
-          shapeComp.properties.emplace<TextProperties>();
-        } else if (kind == ShapeComponent::Kind::Image) {
-          shapeComp.properties.emplace<ImageProperties>();
         }
       }
       m_scene.reg.emplace<ShapeComponent>(newEntity, shapeComp);
@@ -767,7 +577,8 @@ void CutCommand::redo() {
 }
 
 // DeleteCommand
-DeleteCommand::DeleteCommand(MainWindow *window, const QList<Entity>& entities, QUndoCommand *parent)
+DeleteCommand::DeleteCommand(MainWindow *window, const QList<Entity> &entities,
+                             QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entities(entities) {
   setText(QObject::tr("Delete Entities"));
   auto &m_scene = m_mainWindow->canvas()->scene();
@@ -825,7 +636,7 @@ DeleteCommand::DeleteCommand(MainWindow *window, const QList<Entity>& entities, 
 void DeleteCommand::undo() {
   auto &m_scene = m_mainWindow->canvas()->scene();
   m_entities.clear(); // Clear existing entities as they will be recreated
-  for (const QJsonObject& entityData : m_entitiesData) {
+  for (const QJsonObject &entityData : m_entitiesData) {
     Entity newEntity = m_scene.reg.create();
     if (entityData.contains("NameComponent") &&
         entityData["NameComponent"].isString()) {
@@ -918,62 +729,6 @@ void DeleteCommand::undo() {
           shapeComp.properties = props;
           break;
         }
-        case ShapeComponent::Kind::Line: {
-          LineProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Bezier: {
-          BezierProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Text: {
-          TextProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
-        case ShapeComponent::Kind::Image: {
-          ImageProperties props;
-          const QMetaObject &metaObject = props.staticMetaObject;
-          for (int i = metaObject.propertyOffset();
-               i < metaObject.propertyCount(); ++i) {
-            QMetaProperty metaProperty = metaObject.property(i);
-            if (propsObject.contains(metaProperty.name())) {
-              metaProperty.writeOnGadget(
-                  &props, propsObject[metaProperty.name()].toVariant());
-            }
-          }
-          shapeComp.properties = props;
-          break;
-        }
         }
       } else {
         // If properties are empty or missing, initialize with defaults
@@ -982,14 +737,6 @@ void DeleteCommand::undo() {
           shapeComp.properties.emplace<RectangleProperties>();
         } else if (kind == ShapeComponent::Kind::Circle) {
           shapeComp.properties.emplace<CircleProperties>();
-        } else if (kind == ShapeComponent::Kind::Line) {
-          shapeComp.properties.emplace<LineProperties>();
-        } else if (kind == ShapeComponent::Kind::Bezier) {
-          shapeComp.properties.emplace<BezierProperties>();
-        } else if (kind == ShapeComponent::Kind::Text) {
-          shapeComp.properties.emplace<TextProperties>();
-        } else if (kind == ShapeComponent::Kind::Image) {
-          shapeComp.properties.emplace<ImageProperties>();
         }
       }
       m_scene.reg.emplace<ShapeComponent>(newEntity, shapeComp);
@@ -1010,13 +757,18 @@ void DeleteCommand::redo() {
 }
 
 // ChangeNameCommand
-ChangeNameCommand::ChangeNameCommand(MainWindow *window, Entity entity, const std::string& oldName, const std::string& newName, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity), m_oldName(oldName), m_newName(newName) {
+ChangeNameCommand::ChangeNameCommand(MainWindow *window, Entity entity,
+                                     const std::string &oldName,
+                                     const std::string &newName,
+                                     QUndoCommand *parent)
+    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
+      m_oldName(oldName), m_newName(newName) {
   setText(QObject::tr("Change Entity Name"));
 }
 
 void ChangeNameCommand::undo() {
-  if (auto *name = m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
+  if (auto *name =
+          m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
     name->name = m_oldName;
     m_mainWindow->sceneModel()->refresh();
     m_mainWindow->canvas()->update();
@@ -1024,7 +776,8 @@ void ChangeNameCommand::undo() {
 }
 
 void ChangeNameCommand::redo() {
-  if (auto *name = m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
+  if (auto *name =
+          m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
     name->name = m_newName;
     m_mainWindow->sceneModel()->refresh();
     m_mainWindow->canvas()->update();
@@ -1032,15 +785,21 @@ void ChangeNameCommand::redo() {
 }
 
 // ChangeTransformCommand
-ChangeTransformCommand::ChangeTransformCommand(MainWindow *window, Entity entity, float oldX, float oldY, float oldRotation, float oldSx, float oldSy, float newX, float newY, float newRotation, float newSx, float newSy, QUndoCommand *parent)
+ChangeTransformCommand::ChangeTransformCommand(
+    MainWindow *window, Entity entity, float oldX, float oldY,
+    float oldRotation, float oldSx, float oldSy, float newX, float newY,
+    float newRotation, float newSx, float newSy, QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation), m_oldSx(oldSx), m_oldSy(oldSy),
-      m_newX(newX), m_newY(newY), m_newRotation(newRotation), m_newSx(newSx), m_newSy(newSy) {
+      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation), m_oldSx(oldSx),
+      m_oldSy(oldSy), m_newX(newX), m_newY(newY), m_newRotation(newRotation),
+      m_newSx(newSx), m_newSy(newSy) {
   setText(QObject::tr("Change Entity Transform"));
 }
 
 void ChangeTransformCommand::undo() {
-  if (auto *transform = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(m_entity)) {
+  if (auto *transform =
+          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+              m_entity)) {
     transform->x = m_oldX;
     transform->y = m_oldY;
     transform->rotation = m_oldRotation;
@@ -1051,7 +810,9 @@ void ChangeTransformCommand::undo() {
 }
 
 void ChangeTransformCommand::redo() {
-  if (auto *transform = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(m_entity)) {
+  if (auto *transform =
+          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+              m_entity)) {
     transform->x = m_newX;
     transform->y = m_newY;
     transform->rotation = m_newRotation;
@@ -1062,15 +823,24 @@ void ChangeTransformCommand::redo() {
 }
 
 // ChangeMaterialCommand
-ChangeMaterialCommand::ChangeMaterialCommand(MainWindow *window, Entity entity, SkColor oldColor, bool oldIsFilled, bool oldIsStroked, float oldStrokeWidth, bool oldAntiAliased, SkColor newColor, bool newIsFilled, bool newIsStroked, float newStrokeWidth, bool newAntiAliased, QUndoCommand *parent)
+ChangeMaterialCommand::ChangeMaterialCommand(
+    MainWindow *window, Entity entity, SkColor oldColor, bool oldIsFilled,
+    bool oldIsStroked, float oldStrokeWidth, bool oldAntiAliased,
+    SkColor newColor, bool newIsFilled, bool newIsStroked, float newStrokeWidth,
+    bool newAntiAliased, QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldColor(oldColor), m_oldIsFilled(oldIsFilled), m_oldIsStroked(oldIsStroked), m_oldStrokeWidth(oldStrokeWidth), m_oldAntiAliased(oldAntiAliased),
-      m_newColor(newColor), m_newIsFilled(newIsFilled), m_newIsStroked(newIsStroked), m_newStrokeWidth(newStrokeWidth), m_newAntiAliased(newAntiAliased) {
+      m_oldColor(oldColor), m_oldIsFilled(oldIsFilled),
+      m_oldIsStroked(oldIsStroked), m_oldStrokeWidth(oldStrokeWidth),
+      m_oldAntiAliased(oldAntiAliased), m_newColor(newColor),
+      m_newIsFilled(newIsFilled), m_newIsStroked(newIsStroked),
+      m_newStrokeWidth(newStrokeWidth), m_newAntiAliased(newAntiAliased) {
   setText(QObject::tr("Change Entity Material"));
 }
 
 void ChangeMaterialCommand::undo() {
-  if (auto *material = m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(m_entity)) {
+  if (auto *material =
+          m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
+              m_entity)) {
     material->color = m_oldColor;
     material->isFilled = m_oldIsFilled;
     material->isStroked = m_oldIsStroked;
@@ -1081,7 +851,9 @@ void ChangeMaterialCommand::undo() {
 }
 
 void ChangeMaterialCommand::redo() {
-  if (auto *material = m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(m_entity)) {
+  if (auto *material =
+          m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
+              m_entity)) {
     material->color = m_newColor;
     material->isFilled = m_newIsFilled;
     material->isStroked = m_newIsStroked;
@@ -1092,7 +864,9 @@ void ChangeMaterialCommand::redo() {
 }
 
 // ChangeAnimationCommand
-ChangeAnimationCommand::ChangeAnimationCommand(MainWindow *window, Entity entity, float oldEntryTime, float oldExitTime, float newEntryTime, float newExitTime, QUndoCommand *parent)
+ChangeAnimationCommand::ChangeAnimationCommand(
+    MainWindow *window, Entity entity, float oldEntryTime, float oldExitTime,
+    float newEntryTime, float newExitTime, QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
       m_oldEntryTime(oldEntryTime), m_oldExitTime(oldExitTime),
       m_newEntryTime(newEntryTime), m_newExitTime(newExitTime) {
@@ -1100,7 +874,9 @@ ChangeAnimationCommand::ChangeAnimationCommand(MainWindow *window, Entity entity
 }
 
 void ChangeAnimationCommand::undo() {
-  if (auto *animation = m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(m_entity)) {
+  if (auto *animation =
+          m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
+              m_entity)) {
     animation->entryTime = m_oldEntryTime;
     animation->exitTime = m_oldExitTime;
     m_mainWindow->canvas()->update();
@@ -1108,7 +884,9 @@ void ChangeAnimationCommand::undo() {
 }
 
 void ChangeAnimationCommand::redo() {
-  if (auto *animation = m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(m_entity)) {
+  if (auto *animation =
+          m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
+              m_entity)) {
     animation->entryTime = m_newEntryTime;
     animation->exitTime = m_newExitTime;
     m_mainWindow->canvas()->update();
@@ -1116,15 +894,25 @@ void ChangeAnimationCommand::redo() {
 }
 
 // ChangeScriptCommand
-ChangeScriptCommand::ChangeScriptCommand(MainWindow *window, Entity entity, const std::string& oldScriptPath, const std::string& oldStartFunction, const std::string& oldUpdateFunction, const std::string& oldDestroyFunction, const std::string& newScriptPath, const std::string& newStartFunction, const std::string& newUpdateFunction, const std::string& newDestroyFunction, QUndoCommand *parent)
+ChangeScriptCommand::ChangeScriptCommand(
+    MainWindow *window, Entity entity, const std::string &oldScriptPath,
+    const std::string &oldStartFunction, const std::string &oldUpdateFunction,
+    const std::string &oldDestroyFunction, const std::string &newScriptPath,
+    const std::string &newStartFunction, const std::string &newUpdateFunction,
+    const std::string &newDestroyFunction, QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldScriptPath(oldScriptPath), m_oldStartFunction(oldStartFunction), m_oldUpdateFunction(oldUpdateFunction), m_oldDestroyFunction(oldDestroyFunction),
-      m_newScriptPath(newScriptPath), m_newStartFunction(newStartFunction), m_newUpdateFunction(newUpdateFunction), m_newDestroyFunction(newDestroyFunction) {
+      m_oldScriptPath(oldScriptPath), m_oldStartFunction(oldStartFunction),
+      m_oldUpdateFunction(oldUpdateFunction),
+      m_oldDestroyFunction(oldDestroyFunction), m_newScriptPath(newScriptPath),
+      m_newStartFunction(newStartFunction),
+      m_newUpdateFunction(newUpdateFunction),
+      m_newDestroyFunction(newDestroyFunction) {
   setText(QObject::tr("Change Entity Script"));
 }
 
 void ChangeScriptCommand::undo() {
-  if (auto *script = m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
+  if (auto *script =
+          m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
     script->scriptPath = m_oldScriptPath;
     script->startFunction = m_oldStartFunction;
     script->updateFunction = m_oldUpdateFunction;
@@ -1134,7 +922,8 @@ void ChangeScriptCommand::undo() {
 }
 
 void ChangeScriptCommand::redo() {
-  if (auto *script = m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
+  if (auto *script =
+          m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
     script->scriptPath = m_newScriptPath;
     script->startFunction = m_newStartFunction;
     script->updateFunction = m_newUpdateFunction;
@@ -1144,20 +933,27 @@ void ChangeScriptCommand::redo() {
 }
 
 // ChangeShapePropertyCommand
-ChangeShapePropertyCommand::ChangeShapePropertyCommand(MainWindow *window, Entity entity, ShapeComponent::Kind kind, const QJsonObject& oldProperties, const QJsonObject& newProperties, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity), m_kind(kind), m_oldProperties(oldProperties), m_newProperties(newProperties) {
+ChangeShapePropertyCommand::ChangeShapePropertyCommand(
+    MainWindow *window, Entity entity, ShapeComponent::Kind kind,
+    const QJsonObject &oldProperties, const QJsonObject &newProperties,
+    QUndoCommand *parent)
+    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
+      m_kind(kind), m_oldProperties(oldProperties),
+      m_newProperties(newProperties) {
   setText(QObject::tr("Change Entity Shape Property"));
 }
 
 void ChangeShapePropertyCommand::undo() {
-  if (auto *shapeComp = m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
+  if (auto *shapeComp =
+          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
     shapeComp->setProperties(m_oldProperties);
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeShapePropertyCommand::redo() {
-  if (auto *shapeComp = m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
+  if (auto *shapeComp =
+          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
     shapeComp->setProperties(m_newProperties);
     m_mainWindow->canvas()->update();
   }

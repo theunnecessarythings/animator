@@ -23,6 +23,7 @@
 using namespace skgpu::ganesh;
 
 #include <QDragEnterEvent>
+#include <QMap>
 #include <QMimeData>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLFunctions>
@@ -42,11 +43,41 @@ public:
 
   Scene &scene() { return scene_; }
 
-  void setSelectedEntity(Entity entity) { selectedEntity_ = entity; }
+  void setSelectedEntity(Entity entity) {
+    selectedEntities_.clear();
+    if (entity != kInvalidEntity) {
+      selectedEntities_.append(entity);
+    }
+    update();
+    emit canvasSelectionChanged(selectedEntities_);
+  }
+
+  void setSelectedEntities(const QList<Entity> &entities) {
+    selectedEntities_ = entities;
+    update();
+    emit canvasSelectionChanged(selectedEntities_);
+  }
+
+  const QList<Entity> &getSelectedEntities() const { return selectedEntities_; }
 
   void setCurrentTime(float time) { currentTime_ = time; }
 
 protected:
+  inline bool isPointInPolygon(const SkPoint &point, const SkPoint polygon[],
+                               int n) {
+    bool inside = false;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+      if (((polygon[i].y() > point.y()) != (polygon[j].y() > point.y())) &&
+          (point.x() < (polygon[j].x() - polygon[i].x()) *
+                               (point.y() - polygon[i].y()) /
+                               (polygon[j].y() - polygon[i].y()) +
+                           polygon[i].x())) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
   void initializeGL() override {
     initializeOpenGLFunctions();
     QOpenGLContext *qtCtx = QOpenGLContext::currentContext();
@@ -112,8 +143,9 @@ protected:
     canvas->clear(SK_ColorWHITE);
     scene_.renderer.render(canvas, currentTime_);
 
-    if (selectedEntity_ != kInvalidEntity) {
-      if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
+    // Draw selection highlights for all selected entities
+    for (Entity entity : selectedEntities_) {
+      if (auto *tc = scene_.reg.get<TransformComponent>(entity)) {
         SkPaint p;
         p.setColor(SK_ColorRED);
         p.setStroke(true);
@@ -121,7 +153,7 @@ protected:
         p.setStrokeWidth(2);
 
         SkRect originalBounds;
-        if (auto *sc = scene_.reg.get<ShapeComponent>(selectedEntity_)) {
+        if (auto *sc = scene_.reg.get<ShapeComponent>(entity)) {
           switch (sc->kind) {
           case ShapeComponent::Kind::Rectangle: {
             const auto &rectProps =
@@ -138,49 +170,6 @@ protected:
                                  circleProps.radius, circleProps.radius);
             break;
           }
-          case ShapeComponent::Kind::Line: {
-            const auto &lineProps = std::get<LineProperties>(sc->properties);
-            originalBounds =
-                SkRect::MakeLTRB(std::min(lineProps.x1, lineProps.x2),
-                                 std::min(lineProps.y1, lineProps.y2),
-                                 std::max(lineProps.x1, lineProps.x2),
-                                 std::max(lineProps.y1, lineProps.y2));
-            break;
-          }
-          case ShapeComponent::Kind::Bezier: {
-            const auto &bezierProps =
-                std::get<BezierProperties>(sc->properties);
-            SkPath path;
-            path.moveTo(bezierProps.x1, bezierProps.y1);
-            path.cubicTo(bezierProps.cx1, bezierProps.cy1, bezierProps.cx2,
-                         bezierProps.cy2, bezierProps.x2, bezierProps.y2);
-            originalBounds = path.getBounds();
-            break;
-          }
-          case ShapeComponent::Kind::Text: {
-            const auto &textProps = std::get<TextProperties>(sc->properties);
-            SkFont font;
-            font.setSize(textProps.fontSize);
-            SkRect textBounds;
-            font.measureText(textProps.text.toStdString().c_str(),
-                             textProps.text.toStdString().length(),
-                             SkTextEncoding::kUTF8, &textBounds);
-            originalBounds = textBounds;
-            break;
-          }
-          case ShapeComponent::Kind::Image: {
-            const auto &imageProps = std::get<ImageProperties>(sc->properties);
-            sk_sp<SkData> data = SkData::MakeFromFileName(
-                imageProps.filePath.toStdString().c_str());
-            if (data) {
-              // sk_sp<SkImage> image = SkImage::MakeFromEncoded(data);
-              // if (image) {
-              //   originalBounds =
-              //       SkRect::MakeWH(image->width(), image->height());
-              // }
-            }
-            break;
-          }
           }
         }
 
@@ -191,7 +180,7 @@ protected:
 
         SkPoint transformedCorners[4];
         originalBounds.toQuad(transformedCorners);
-        matrix.mapPoints(transformedCorners);
+        matrix.mapPoints(transformedCorners, transformedCorners);
 
         // Draw OBB
         canvas->drawLine(transformedCorners[0], transformedCorners[1], p);
@@ -199,19 +188,40 @@ protected:
         canvas->drawLine(transformedCorners[2], transformedCorners[3], p);
         canvas->drawLine(transformedCorners[3], transformedCorners[0], p);
 
-        // Rotation handle
-        SkPaint handlePaint;
-        handlePaint.setColor(SK_ColorRED);
-        handlePaint.setAntiAlias(true);
+        // Rotation handle (only if one entity is selected)
+        if (selectedEntities_.count() == 1) {
+          SkPaint handlePaint;
+          handlePaint.setColor(SK_ColorRED);
+          handlePaint.setAntiAlias(true);
 
-        SkPoint rotationHandleCenter =
-            SkPoint::Make(originalBounds.centerX(), originalBounds.top() - 10);
-        SkSpan<SkPoint> rotationHandlePoints(&rotationHandleCenter, 1);
-        matrix.mapPoints(rotationHandlePoints);
+          SkPoint rotationHandleCenter = SkPoint::Make(
+              originalBounds.centerX(), originalBounds.top() - 10);
+          SkSpan<SkPoint> rotationHandleCenterSpan(&rotationHandleCenter, 1);
+          matrix.mapPoints(rotationHandleCenterSpan);
 
-        canvas->drawCircle(rotationHandleCenter.x(), rotationHandleCenter.y(),
-                           8, handlePaint);
+          canvas->drawCircle(rotationHandleCenter.x(), rotationHandleCenter.y(),
+                             8, handlePaint);
+        }
       }
+    }
+
+    // Draw marquee selection rectangle
+    if (isMarqueeSelecting_) {
+      SkPaint p;
+      p.setColor(SkColorSetARGB(100, 0, 0, 255)); // semi-transparent blue
+      p.setStyle(SkPaint::kFill_Style);
+      canvas->drawRect(
+          SkRect::MakeLTRB(marqueeStartPoint_.x(), marqueeStartPoint_.y(),
+                           marqueeEndPoint_.x(), marqueeEndPoint_.y()),
+          p);
+
+      p.setColor(SK_ColorBLUE);
+      p.setStyle(SkPaint::kStroke_Style);
+      p.setStrokeWidth(1);
+      canvas->drawRect(
+          SkRect::MakeLTRB(marqueeStartPoint_.x(), marqueeStartPoint_.y(),
+                           marqueeEndPoint_.x(), marqueeEndPoint_.y()),
+          p);
     }
 
     fContext->flushAndSubmit();
@@ -240,14 +250,6 @@ protected:
     ShapeComponent::Kind kind = ShapeComponent::Kind::Rectangle;
     if (id == "shape/circle")
       kind = ShapeComponent::Kind::Circle;
-    else if (id == "shape/line")
-      kind = ShapeComponent::Kind::Line;
-    else if (id == "shape/bezier")
-      kind = ShapeComponent::Kind::Bezier;
-    else if (id == "shape/text")
-      kind = ShapeComponent::Kind::Text;
-    else if (id == "shape/image")
-      kind = ShapeComponent::Kind::Image;
 
     scene_.createShape(kind, scenePos.x(), scenePos.y());
     emit sceneChanged();
@@ -255,14 +257,14 @@ protected:
   }
 
   void mousePressEvent(QMouseEvent *e) override {
-    selectedEntity_ = kInvalidEntity;
+    bool shiftPressed = e->modifiers() & Qt::ShiftModifier;
+    Entity clickedEntity = kInvalidEntity;
     isDragging_ = false;
     isRotating_ = false;
-    initialTransform_ = {0, 0, 0, 0, 0}; // Reset initial transform
+    initialTransforms_.clear();
 
     scene_.reg.each<TransformComponent>([&](Entity ent,
                                             TransformComponent &tr) {
-      // Skip selection if it's a background component
       if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
         return;
       }
@@ -283,48 +285,6 @@ protected:
                                circleProps.radius, circleProps.radius);
           break;
         }
-        case ShapeComponent::Kind::Line: {
-          const auto &lineProps = std::get<LineProperties>(sc->properties);
-          originalBounds =
-              SkRect::MakeLTRB(std::min(lineProps.x1, lineProps.x2),
-                               std::min(lineProps.y1, lineProps.y2),
-                               std::max(lineProps.x1, lineProps.x2),
-                               std::max(lineProps.y1, lineProps.y2));
-          break;
-        }
-        case ShapeComponent::Kind::Bezier: {
-          const auto &bezierProps = std::get<BezierProperties>(sc->properties);
-          SkPath path;
-          path.moveTo(bezierProps.x1, bezierProps.y1);
-          path.cubicTo(bezierProps.cx1, bezierProps.cy1, bezierProps.cx2,
-                       bezierProps.cy2, bezierProps.x2, bezierProps.y2);
-          originalBounds = path.getBounds();
-          break;
-        }
-        case ShapeComponent::Kind::Text: {
-          const auto &textProps = std::get<TextProperties>(sc->properties);
-          SkFont font;
-          font.setSize(textProps.fontSize);
-          SkRect textBounds;
-          font.measureText(textProps.text.toStdString().c_str(),
-                           textProps.text.toStdString().length(),
-                           SkTextEncoding::kUTF8, &textBounds);
-          originalBounds = textBounds;
-          break;
-        }
-        case ShapeComponent::Kind::Image: {
-          const auto &imageProps = std::get<ImageProperties>(sc->properties);
-          sk_sp<SkData> data = SkData::MakeFromFileName(
-              imageProps.filePath.toStdString().c_str());
-          if (data) {
-            // sk_sp<SkImage> image = SkImage::MakeFromEncoded(data);
-            // if (image) {
-            //   originalBounds = SkRect::MakeWH(image->width(),
-            //   image->height());
-            // }
-          }
-          break;
-        }
         }
       }
 
@@ -335,45 +295,100 @@ protected:
 
       SkPoint transformedCorners[4];
       originalBounds.toQuad(transformedCorners);
-      matrix.mapPoints(transformedCorners);
+      matrix.mapPoints(transformedCorners, transformedCorners);
 
-      SkRect bounds;
-      bounds.setBounds(transformedCorners);
-
-      SkPoint rotationHandleCenter =
-          SkPoint::Make(originalBounds.centerX(), originalBounds.top() - 10);
-      SkSpan<SkPoint> rotationHandlePoints(&rotationHandleCenter, 1);
-      matrix.mapPoints(rotationHandlePoints);
-
-      SkRect handleBounds = SkRect::MakeLTRB(
-          rotationHandleCenter.x() - 8, rotationHandleCenter.y() - 8,
-          rotationHandleCenter.x() + 8, rotationHandleCenter.y() + 8);
-      if (handleBounds.contains(e->x(), e->y())) {
-        selectedEntity_ = ent;
-        isRotating_ = true;
-        dragStart_ = e->pos();
-        if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
-          initialTransform_ = {tc->x, tc->y, tc->rotation, tc->sx, tc->sy};
-        }
-        return;
-      }
-
-      if (bounds.contains(e->x(), e->y())) {
-        selectedEntity_ = ent;
-        isDragging_ = true;
-        dragStart_ = e->pos();
-        if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
-          initialTransform_ = {tc->x, tc->y, tc->rotation, tc->sx, tc->sy};
-        }
+      if (isPointInPolygon(SkPoint::Make(e->x(), e->y()), transformedCorners,
+                           4)) {
+        clickedEntity = ent;
       }
     });
-    emit canvasSelectionChanged(selectedEntity_);
+
+    if (selectedEntities_.count() == 1) {
+      Entity selectedEntity = selectedEntities_.first();
+      if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity)) {
+        SkRect originalBounds;
+        if (auto *sc = scene_.reg.get<ShapeComponent>(selectedEntity)) {
+          switch (sc->kind) {
+          case ShapeComponent::Kind::Rectangle: {
+            const auto &rectProps =
+                std::get<RectangleProperties>(sc->properties);
+            originalBounds =
+                SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
+            break;
+          }
+          case ShapeComponent::Kind::Circle: {
+            const auto &circleProps =
+                std::get<CircleProperties>(sc->properties);
+            originalBounds =
+                SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
+                                 circleProps.radius, circleProps.radius);
+            break;
+          }
+          }
+        }
+
+        SkMatrix matrix;
+        matrix.setTranslate(tc->x, tc->y);
+        matrix.preRotate(tc->rotation * 180 / M_PI);
+        matrix.preScale(tc->sx, tc->sy);
+
+        SkPoint rotationHandleCenter =
+            SkPoint::Make(originalBounds.centerX(), originalBounds.top() - 10);
+        SkSpan<SkPoint> rotationHandleCenterSpan(&rotationHandleCenter, 1);
+        matrix.mapPoints(rotationHandleCenterSpan);
+
+        SkRect handleBounds = SkRect::MakeLTRB(
+            rotationHandleCenter.x() - 8, rotationHandleCenter.y() - 8,
+            rotationHandleCenter.x() + 8, rotationHandleCenter.y() + 8);
+        if (handleBounds.contains(e->x(), e->y())) {
+          isRotating_ = true;
+          dragStart_ = e->pos();
+          initialTransforms_[selectedEntity] = {tc->x, tc->y, tc->rotation,
+                                                tc->sx, tc->sy};
+          update();
+          return; // Don't process other selection logic
+        }
+      }
+    }
+
+    if (clickedEntity != kInvalidEntity) { // An entity was clicked
+      if (shiftPressed) {
+        if (selectedEntities_.contains(clickedEntity)) {
+          selectedEntities_.removeOne(clickedEntity);
+        } else {
+          selectedEntities_.append(clickedEntity);
+        }
+      } else {
+        if (!selectedEntities_.contains(clickedEntity)) {
+          selectedEntities_.clear();
+          selectedEntities_.append(clickedEntity);
+        }
+      }
+      isDragging_ = true;
+      dragStart_ = e->pos();
+      for (Entity entity : selectedEntities_) {
+        if (auto *tc = scene_.reg.get<TransformComponent>(entity)) {
+          initialTransforms_[entity] = {tc->x, tc->y, tc->rotation, tc->sx,
+                                        tc->sy};
+        }
+      }
+    } else { // Background was clicked
+      if (!shiftPressed) {
+        selectedEntities_.clear();
+      }
+      isMarqueeSelecting_ = true;
+      marqueeStartPoint_ = e->pos();
+      marqueeEndPoint_ = e->pos();
+    }
+
+    emit canvasSelectionChanged(selectedEntities_);
     update();
   }
 
   void mouseMoveEvent(QMouseEvent *e) override {
-    if (isRotating_ && selectedEntity_ != kInvalidEntity) {
-      if (auto *c = scene_.reg.get<TransformComponent>(selectedEntity_)) {
+    if (isRotating_ && selectedEntities_.count() == 1) {
+      Entity entity = selectedEntities_.first();
+      if (auto *c = scene_.reg.get<TransformComponent>(entity)) {
         SkPoint center = SkPoint::Make(c->x, c->y);
         SkPoint prevPoint = SkPoint::Make(dragStart_.x(), dragStart_.y());
         SkPoint currPoint = SkPoint::Make(e->pos().x(), e->pos().y());
@@ -386,7 +401,6 @@ protected:
 
         float angleDelta = angleCurr - anglePrev;
 
-        // Normalize angleDelta to be within -PI to PI
         if (angleDelta > M_PI) {
           angleDelta -= 2 * M_PI;
         } else if (angleDelta < -M_PI) {
@@ -396,34 +410,99 @@ protected:
         c->rotation += angleDelta;
 
         dragStart_ = e->pos();
-        emit transformChanged(selectedEntity_);
+        emit transformChanged(entity);
         update();
       }
-    } else if (isDragging_ && selectedEntity_ != kInvalidEntity) {
-      if (auto *c = scene_.reg.get<TransformComponent>(selectedEntity_)) {
-        QPointF delta = e->pos() - dragStart_;
-        c->x += delta.x();
-        c->y += delta.y();
-        dragStart_ = e->pos();
-        emit transformChanged(selectedEntity_);
-        update();
+    } else if (isDragging_ && !selectedEntities_.isEmpty()) {
+      QPointF delta = e->pos() - dragStart_;
+      for (Entity entity : selectedEntities_) {
+        if (auto *c = scene_.reg.get<TransformComponent>(entity)) {
+          c->x = initialTransforms_[entity].x + delta.x();
+          c->y = initialTransforms_[entity].y + delta.y();
+        }
       }
+      if (selectedEntities_.count() == 1) {
+        emit transformChanged(selectedEntities_.first());
+      }
+      update();
+    } else if (isMarqueeSelecting_) {
+      marqueeEndPoint_ = e->pos();
+      update();
     }
   }
 
-  void mouseReleaseEvent(QMouseEvent * /*e*/) override {
-    if (selectedEntity_ != kInvalidEntity && (isDragging_ || isRotating_)) {
-      if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity_)) {
-        // Emit transformationCompleted only if transform values have changed
-        if (initialTransform_.x != tc->x || initialTransform_.y != tc->y ||
-            initialTransform_.rotation != tc->rotation ||
-            initialTransform_.sx != tc->sx || initialTransform_.sy != tc->sy) {
-          emit transformationCompleted(
-              selectedEntity_, initialTransform_.x, initialTransform_.y,
-              initialTransform_.rotation, tc->x, tc->y, tc->rotation);
+  void mouseReleaseEvent(QMouseEvent *e) override {
+    if (isMarqueeSelecting_) {
+      isMarqueeSelecting_ = false;
+      bool shiftPressed = e->modifiers() & Qt::ShiftModifier;
+
+      QRectF selectionRect =
+          QRectF(marqueeStartPoint_, marqueeEndPoint_).normalized();
+
+      if (!shiftPressed) {
+        selectedEntities_.clear();
+      }
+
+      scene_.reg.each<TransformComponent>(
+          [&](Entity ent, TransformComponent &tr) {
+            if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
+              return;
+            }
+            SkRect originalBounds;
+            if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
+              switch (sc->kind) {
+              case ShapeComponent::Kind::Rectangle: {
+                const auto &rectProps =
+                    std::get<RectangleProperties>(sc->properties);
+                originalBounds =
+                    SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
+                break;
+              }
+              case ShapeComponent::Kind::Circle: {
+                const auto &circleProps =
+                    std::get<CircleProperties>(sc->properties);
+                originalBounds =
+                    SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
+                                     circleProps.radius, circleProps.radius);
+                break;
+              }
+              }
+            }
+
+            SkMatrix matrix;
+            matrix.setTranslate(tr.x, tr.y);
+            matrix.preRotate(tr.rotation * 180 / M_PI);
+            matrix.preScale(tr.sx, tr.sy);
+
+            SkRect entityAABB;
+            matrix.mapRect(&entityAABB, originalBounds);
+
+            if (selectionRect.intersects(QRectF(entityAABB.x(), entityAABB.y(),
+                                                entityAABB.width(),
+                                                entityAABB.height()))) {
+              if (!selectedEntities_.contains(ent)) {
+                selectedEntities_.append(ent);
+              }
+            }
+          });
+      emit canvasSelectionChanged(selectedEntities_);
+    }
+
+    if (isDragging_ || isRotating_) {
+      if (selectedEntities_.count() == 1) {
+        Entity entity = selectedEntities_.first();
+        if (auto *tc = scene_.reg.get<TransformComponent>(entity)) {
+          const auto &initial = initialTransforms_[entity];
+          if (initial.x != tc->x || initial.y != tc->y ||
+              initial.rotation != tc->rotation) {
+            emit transformationCompleted(entity, initial.x, initial.y,
+                                         initial.rotation, tc->x, tc->y,
+                                         tc->rotation);
+          }
         }
       }
     }
+
     isDragging_ = false;
     isRotating_ = false;
     update();
@@ -432,7 +511,7 @@ protected:
 signals:
   void sceneChanged();
   void transformChanged(Entity entity);
-  void canvasSelectionChanged(Entity entity);
+  void canvasSelectionChanged(const QList<Entity> &entities);
   void transformationCompleted(Entity entity, float oldX, float oldY,
                                float oldRotation, float newX, float newY,
                                float newRotation);
@@ -447,10 +526,14 @@ private:
   sk_sp<const GrGLInterface> iface;
   sk_sp<SkFontMgr> fontMgr;
   Scene scene_;
-  Entity selectedEntity_ = kInvalidEntity;
+
+  QList<Entity> selectedEntities_;
   bool isDragging_ = false;
   bool isRotating_ = false;
+  bool isMarqueeSelecting_ = false;
   QPointF dragStart_;
+  QPointF marqueeStartPoint_;
+  QPointF marqueeEndPoint_;
   float currentTime_ = 0.0f;
-  TransformData initialTransform_;
+  QMap<Entity, TransformData> initialTransforms_;
 };

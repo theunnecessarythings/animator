@@ -21,7 +21,9 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include "qdebug.h"
 #include <QCoreApplication>
+#include <QDebug>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMetaObject>
@@ -142,65 +144,14 @@ public:
 };
 Q_DECLARE_METATYPE(CircleProperties);
 
-struct LineProperties {
-  Q_GADGET
-  Q_PROPERTY(float x1 MEMBER x1)
-  Q_PROPERTY(float y1 MEMBER y1)
-  Q_PROPERTY(float x2 MEMBER x2)
-  Q_PROPERTY(float y2 MEMBER y2)
-public:
-  float x1 = 0.0f, y1 = 0.0f;
-  float x2 = 100.0f, y2 = 0.0f;
-};
-Q_DECLARE_METATYPE(LineProperties);
-
-struct BezierProperties {
-  Q_GADGET
-  Q_PROPERTY(float x1 MEMBER x1)
-  Q_PROPERTY(float y1 MEMBER y1)
-  Q_PROPERTY(float cx1 MEMBER cx1)
-  Q_PROPERTY(float cy1 MEMBER cy1)
-  Q_PROPERTY(float cx2 MEMBER cx2)
-  Q_PROPERTY(float cy2 MEMBER cy2)
-  Q_PROPERTY(float x2 MEMBER x2)
-  Q_PROPERTY(float y2 MEMBER y2)
-public:
-  float x1 = 0.0f, y1 = 0.0f;
-  float cx1 = 25.0f, cy1 = 75.0f;
-  float cx2 = 75.0f, cy2 = 25.0f;
-  float x2 = 100.0f, y2 = 100.0f;
-};
-Q_DECLARE_METATYPE(BezierProperties);
-
-struct TextProperties {
-  Q_GADGET
-  Q_PROPERTY(QString text MEMBER text)
-  Q_PROPERTY(float fontSize MEMBER fontSize)
-  Q_PROPERTY(QString fontFamily MEMBER fontFamily)
-public:
-  QString text = "Hello World";
-  float fontSize = 24.0f;
-  QString fontFamily = "Arial";
-};
-Q_DECLARE_METATYPE(TextProperties);
-
-struct ImageProperties {
-  Q_GADGET
-  Q_PROPERTY(QString filePath MEMBER filePath)
-public:
-  QString filePath;
-};
-
 struct ShapeComponent {
   Q_GADGET
   Q_PROPERTY(Kind kind MEMBER kind)
   Q_PROPERTY(QVariant properties READ getProperties WRITE setProperties)
 public:
-  enum class Kind { Rectangle, Circle, Line, Bezier, Text, Image };
+  enum class Kind { Rectangle, Circle };
   Kind kind;
-  std::variant<std::monostate, RectangleProperties, CircleProperties,
-               LineProperties, BezierProperties, TextProperties,
-               ImageProperties>
+  std::variant<std::monostate, RectangleProperties, CircleProperties>
       properties; // Add other shape properties here as they are defined
 
   QVariant getProperties() const {
@@ -229,14 +180,6 @@ public:
       properties = value.value<RectangleProperties>();
     } else if (value.canConvert<CircleProperties>()) {
       properties = value.value<CircleProperties>();
-    } else if (value.canConvert<LineProperties>()) {
-      properties = value.value<LineProperties>();
-    } else if (value.canConvert<BezierProperties>()) {
-      properties = value.value<BezierProperties>();
-    } else if (value.canConvert<TextProperties>()) {
-      properties = value.value<TextProperties>();
-    } else if (value.canConvert<ImageProperties>()) {
-      properties = value.value<ImageProperties>();
     }
   }
 
@@ -246,14 +189,6 @@ public:
       return "Rectangle";
     case Kind::Circle:
       return "Circle";
-    case Kind::Line:
-      return "Line";
-    case Kind::Bezier:
-      return "Bezier";
-    case Kind::Text:
-      return "Text";
-    case Kind::Image:
-      return "Image";
     }
     return "";
   }
@@ -496,7 +431,8 @@ public:
       if (script) {
         scriptEngine_.callScriptFunction(script->scriptEnv,
                                          script->destroyFunction);
-        // No explicit unload needed for sol2 tables, they are managed by Lua GC
+        // No explicit unload needed for sol2 tables, they are managed by Lua
+        // GC
       }
     };
   }
@@ -528,196 +464,85 @@ public:
   explicit RenderSystem(Registry &r) : reg_(r) {}
 
   void render(SkCanvas *canvas, float currentTime) {
-    // Render background entities first
-    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &tr) {
-      if (!reg_.has<SceneBackgroundComponent>(ent))
-        return; // Skip if not a background component
+    std::vector<Entity> backgroundEntities;
+    std::vector<Entity> foregroundEntities;
 
-      auto *shape = reg_.get<ShapeComponent>(ent);
-      if (!shape)
-        return;
-
-      auto *material = reg_.get<MaterialComponent>(ent);
-      if (!material)
-        return;
-
-      auto *animation = reg_.get<AnimationComponent>(ent);
-      if (animation && (currentTime < animation->entryTime ||
-                        currentTime > animation->exitTime)) {
-        return; // Don't render if outside entry/exit times
-      }
-
-      SkPaint paint;
-      paint.setAntiAlias(material->antiAliased);
-      paint.setColor(material->color);
-      if (material->isFilled && material->isStroked) {
-        paint.setStyle(SkPaint::kStrokeAndFill_Style);
-      } else if (material->isFilled) {
-        paint.setStyle(SkPaint::kFill_Style);
-      } else if (material->isStroked) {
-        paint.setStyle(SkPaint::kStroke_Style);
+    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &) {
+      if (reg_.has<SceneBackgroundComponent>(ent)) {
+        backgroundEntities.push_back(ent);
       } else {
-        paint.setStyle(SkPaint::kFill_Style);
+        foregroundEntities.push_back(ent);
       }
-      paint.setStrokeWidth(material->strokeWidth);
-
-      canvas->save();
-      canvas->translate(tr.x, tr.y);
-      canvas->rotate(tr.rotation * 180 / M_PI);
-      canvas->scale(tr.sx, tr.sy);
-
-      switch (shape->kind) {
-      case ShapeComponent::Kind::Rectangle: {
-        const auto &rectProps =
-            std::get<RectangleProperties>(shape->properties);
-        canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Circle: {
-        const auto &circleProps = std::get<CircleProperties>(shape->properties);
-        canvas->drawCircle(0, 0, circleProps.radius, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Line: {
-        const auto &lineProps = std::get<LineProperties>(shape->properties);
-        canvas->drawLine(lineProps.x1, lineProps.y1, lineProps.x2, lineProps.y2,
-                         paint);
-        break;
-      }
-      case ShapeComponent::Kind::Bezier: {
-        const auto &bezierProps = std::get<BezierProperties>(shape->properties);
-        SkPath path;
-        path.moveTo(bezierProps.x1, bezierProps.y1);
-        path.cubicTo(bezierProps.cx1, bezierProps.cy1, bezierProps.cx2,
-                     bezierProps.cy2, bezierProps.x2, bezierProps.y2);
-        canvas->drawPath(path, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Text: {
-        const auto &textProps = std::get<TextProperties>(shape->properties);
-        SkFont font;
-        font.setSize(textProps.fontSize);
-        // TODO: Set font family using SkFontMgr
-        canvas->drawString(textProps.text.toStdString().c_str(), 0, 0, font,
-                           paint);
-        break;
-      }
-      case ShapeComponent::Kind::Image: {
-        const auto &imageProps = std::get<ImageProperties>(shape->properties);
-        // For simplicity, load image every time. In a real app, cache this.
-        sk_sp<SkData> data =
-            SkData::MakeFromFileName(imageProps.filePath.toStdString().c_str());
-        // if (data) {
-        //   sk_sp<SkImage> image = SkImage::MakeFromEncoded(data);
-        //   if (image) {
-        //     canvas->drawImage(image.get(), 0, 0, &paint);
-        //   }
-        // }
-        break;
-      }
-      default:
-        /* TODO */
-        break;
-      }
-      canvas->restore();
     });
 
-    // Render other entities
-    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &tr) {
-      if (reg_.has<SceneBackgroundComponent>(ent))
-        return; // Skip if it's a background component (already rendered)
+    for (Entity ent : backgroundEntities) {
+      if (auto *tr = reg_.get<TransformComponent>(ent)) {
+        renderEntity(canvas, currentTime, ent, *tr);
+      }
+    }
 
-      auto *shape = reg_.get<ShapeComponent>(ent);
-      if (!shape)
-        return;
-
-      auto *material = reg_.get<MaterialComponent>(ent);
-      if (!material)
-        return;
-
-      auto *animation = reg_.get<AnimationComponent>(ent);
-      if (animation && (currentTime < animation->entryTime ||
-                        currentTime > animation->exitTime)) {
-        return; // Don't render if outside entry/exit times
+    for (Entity ent : foregroundEntities) {
+      if (auto *tr = reg_.get<TransformComponent>(ent)) {
+        renderEntity(canvas, currentTime, ent, *tr);
       }
-
-      SkPaint paint;
-      paint.setAntiAlias(material->antiAliased);
-      paint.setColor(material->color);
-      if (material->isFilled && material->isStroked) {
-        paint.setStyle(SkPaint::kStrokeAndFill_Style);
-      } else if (material->isFilled) {
-        paint.setStyle(SkPaint::kFill_Style);
-      } else if (material->isStroked) {
-        paint.setStyle(SkPaint::kStroke_Style);
-      } else {
-        paint.setStyle(SkPaint::kFill_Style);
-      }
-      paint.setStrokeWidth(material->strokeWidth);
-
-      canvas->save();
-      canvas->translate(tr.x, tr.y);
-      canvas->rotate(tr.rotation * 180 / M_PI);
-      canvas->scale(tr.sx, tr.sy);
-
-      switch (shape->kind) {
-      case ShapeComponent::Kind::Rectangle: {
-        const auto &rectProps =
-            std::get<RectangleProperties>(shape->properties);
-        canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Circle: {
-        const auto &circleProps = std::get<CircleProperties>(shape->properties);
-        canvas->drawCircle(0, 0, circleProps.radius, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Line: {
-        const auto &lineProps = std::get<LineProperties>(shape->properties);
-        canvas->drawLine(lineProps.x1, lineProps.y1, lineProps.x2, lineProps.y2,
-                         paint);
-        break;
-      }
-      case ShapeComponent::Kind::Bezier: {
-        const auto &bezierProps = std::get<BezierProperties>(shape->properties);
-        SkPath path;
-        path.moveTo(bezierProps.x1, bezierProps.y1);
-        path.cubicTo(bezierProps.cx1, bezierProps.cy1, bezierProps.cx2,
-                     bezierProps.cy2, bezierProps.x2, bezierProps.y2);
-        canvas->drawPath(path, paint);
-        break;
-      }
-      case ShapeComponent::Kind::Text: {
-        const auto &textProps = std::get<TextProperties>(shape->properties);
-        SkFont font;
-        font.setSize(textProps.fontSize);
-        // TODO: Set font family using SkFontMgr
-        canvas->drawString(textProps.text.toStdString().c_str(), 0, 0, font,
-                           paint);
-        break;
-      }
-      case ShapeComponent::Kind::Image: {
-        const auto &imageProps = std::get<ImageProperties>(shape->properties);
-        // For simplicity, load image every time. In a real app, cache this.
-        sk_sp<SkData> data =
-            SkData::MakeFromFileName(imageProps.filePath.toStdString().c_str());
-        // if (data) {
-        //   sk_sp<SkImage> image = SkImage::MakeFromEncoded(data);
-        //   if (image) {
-        //     canvas->drawImage(image.get(), 0, 0, &paint);
-        //   }
-        // }
-        break;
-      }
-      default:
-        /* TODO */
-        break;
-      }
-      canvas->restore();
-    });
+    }
   }
 
 private:
+  void renderEntity(SkCanvas *canvas, float currentTime, Entity ent,
+                    TransformComponent &tr) {
+    auto *shape = reg_.get<ShapeComponent>(ent);
+    if (!shape)
+      return;
+
+    auto *material = reg_.get<MaterialComponent>(ent);
+    if (!material)
+      return;
+
+    auto *animation = reg_.get<AnimationComponent>(ent);
+    if (animation && (currentTime < animation->entryTime ||
+                      currentTime > animation->exitTime)) {
+      return; // Don't render if outside entry/exit times
+    }
+
+    SkPaint paint;
+    paint.setAntiAlias(material->antiAliased);
+    paint.setColor(material->color);
+    if (material->isFilled && material->isStroked) {
+      paint.setStyle(SkPaint::kStrokeAndFill_Style);
+    } else if (material->isFilled) {
+      paint.setStyle(SkPaint::kFill_Style);
+    } else if (material->isStroked) {
+      paint.setStyle(SkPaint::kStroke_Style);
+    } else {
+      paint.setStyle(SkPaint::kFill_Style);
+    }
+    paint.setStrokeWidth(material->strokeWidth);
+
+    canvas->save();
+    canvas->translate(tr.x, tr.y);
+    canvas->rotate(tr.rotation * 180 / M_PI);
+    canvas->scale(tr.sx, tr.sy);
+
+    switch (shape->kind) {
+    case ShapeComponent::Kind::Rectangle: {
+      const auto &rectProps = std::get<RectangleProperties>(shape->properties);
+      canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
+      break;
+    }
+    case ShapeComponent::Kind::Circle: {
+      const auto &circleProps = std::get<CircleProperties>(shape->properties);
+      canvas->drawCircle(0, 0, circleProps.radius, paint);
+      break;
+    }
+    default:
+      qWarning() << "RenderSystem: Unsupported shape kind for rendering: "
+                 << ShapeComponent::toString(shape->kind);
+      break;
+    }
+    canvas->restore();
+  }
+
   Registry &reg_;
 };
 
@@ -743,14 +568,6 @@ struct Scene {
       shapeComp.properties.emplace<RectangleProperties>();
     } else if (k == ShapeComponent::Kind::Circle) {
       shapeComp.properties.emplace<CircleProperties>();
-    } else if (k == ShapeComponent::Kind::Line) {
-      shapeComp.properties.emplace<LineProperties>();
-    } else if (k == ShapeComponent::Kind::Bezier) {
-      shapeComp.properties.emplace<BezierProperties>();
-    } else if (k == ShapeComponent::Kind::Text) {
-      shapeComp.properties.emplace<TextProperties>();
-    } else if (k == ShapeComponent::Kind::Image) {
-      shapeComp.properties.emplace<ImageProperties>();
     }
     reg.emplace<ShapeComponent>(e, shapeComp);
     reg.emplace<MaterialComponent>(e);
@@ -958,10 +775,6 @@ REGISTER_COMPONENT(ShapeComponent, [](Scene &scene, Entity ent,
     switch (kind) {
       SHAPE_CASE(Rectangle, RectangleProperties)
       SHAPE_CASE(Circle, CircleProperties)
-      SHAPE_CASE(Line, LineProperties)
-      SHAPE_CASE(Bezier, BezierProperties)
-      SHAPE_CASE(Text, TextProperties)
-      SHAPE_CASE(Image, ImageProperties)
     }
   }
   scene.reg.emplace<ShapeComponent>(ent, sc);

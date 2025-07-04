@@ -12,13 +12,8 @@ public:
     setDragEnabled(true);
     setDragDropMode(QAbstractItemView::DragOnly);
 
-    addTool("Selection", QIcon(":/icons/cursor.svg"), "tool/select");
     addTool("Rectangle", QIcon(":/icons/rect.svg"), "shape/rect");
     addTool("Circle", QIcon(":/icons/circle.svg"), "shape/circle");
-    addTool("Line", QIcon(":/icons/line.svg"), "shape/line");
-    addTool("Bezier", QIcon(":/icons/bezier.svg"), "shape/bezier");
-    addTool("Text", QIcon(":/icons/text.svg"), "shape/text");
-    addTool("Image", QIcon(":/icons/image.svg"), "shape/image");
   }
 
 protected:

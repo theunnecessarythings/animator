@@ -316,17 +316,21 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
   m_selectedEntities.clear();
 
   if (sel.indexes().isEmpty()) {
-    m_canvas->setSelectedEntity(kInvalidEntity);
+    m_canvas->setSelectedEntities({});
     m_canvas->update();
     return;
   }
 
-  // current entity
-  Entity e = m_sceneModel->getEntity(sel.indexes().first());
-  m_canvas->setSelectedEntity(e);
-  m_canvas->update();
+  QList<Entity> selected;
   for (auto &idx : sel.indexes())
-    m_selectedEntities.append(m_sceneModel->getEntity(idx));
+    selected.append(m_sceneModel->getEntity(idx));
+  m_canvas->setSelectedEntities(selected);
+  m_canvas->update();
+
+  if (selected.count() != 1) {
+    return;
+  }
+  Entity e = selected.first();
 
   Scene &scene = m_canvas->scene(); // shorthand
 
@@ -638,7 +642,7 @@ void MainWindow::onCut() {
   m_undoStack->push(
       new DeleteCommand(this, m_selectedEntities)); // Then delete them
   m_selectedEntities.clear();
-  m_canvas->setSelectedEntity(kInvalidEntity);
+  m_canvas->setSelectedEntities({});
   m_sceneModel->refresh();
   m_canvas->update();
 }
@@ -649,7 +653,7 @@ void MainWindow::onDelete() {
   }
   m_undoStack->push(new DeleteCommand(this, m_selectedEntities));
   m_selectedEntities.clear();
-  m_canvas->setSelectedEntity(kInvalidEntity);
+  m_canvas->setSelectedEntities({});
   m_sceneModel->refresh();
   m_canvas->update();
 }
@@ -688,17 +692,17 @@ void MainWindow::onPaste() {
   m_canvas->update();
 }
 
-void MainWindow::onCanvasSelectionChanged(Entity entity) {
-  if (entity == kInvalidEntity) {
-    m_sceneTree->selectionModel()->clearSelection();
-    return;
+void MainWindow::onCanvasSelectionChanged(const QList<Entity> &entities) {
+  m_selectedEntities = entities;
+  QItemSelection selection;
+  for (Entity entity : entities) {
+    QModelIndex index = m_sceneModel->indexOfEntity(entity);
+    if (index.isValid()) {
+      selection.select(index, index);
+    }
   }
-
-  QModelIndex index = m_sceneModel->indexOfEntity(entity);
-  if (index.isValid()) {
-    m_sceneTree->selectionModel()->select(index,
-                                          QItemSelectionModel::ClearAndSelect);
-  }
+  m_sceneTree->selectionModel()->select(selection,
+                                        QItemSelectionModel::ClearAndSelect);
 }
 
 void MainWindow::onTransformationCompleted(Entity entity, float oldX,
@@ -729,8 +733,6 @@ void MainWindow::resetScene() {
   m_sceneModel->refresh(); // Refresh the model to reflect changes
   // Re-select the entity to update properties panel if needed
   if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty()) {
-    Entity currentSelectedEntity = m_sceneModel->getEntity(
-        m_sceneTree->selectionModel()->selectedIndexes().first());
     onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
                             QItemSelection());
   }
