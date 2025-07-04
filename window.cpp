@@ -31,6 +31,15 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
                            std::function<void(QVariant)> setter,
                            const QVariant &initial) {
   switch (mp.type()) { // Qt 5 ⇒ use type(), not typeId()
+  case QMetaType::Float: {
+    auto *w = new QDoubleSpinBox(parent);
+    w->setRange(-1e6, 1e6);
+    w->setDecimals(3);
+    w->setValue(initial.toFloat());
+    QObject::connect(w, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                     parent, [setter](double v) { setter(v); });
+    return w;
+  }
   case QMetaType::Double: {
     auto *w = new QDoubleSpinBox(parent);
     w->setRange(-1e6, 1e6);
