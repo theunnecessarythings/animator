@@ -38,3 +38,9 @@ void RegularPolygramShape::rebuildPath() const {
   m_path.reset();
   createRegularPolygramPath(m_path, num_vertices, radius, density, start_angle);
 }
+
+void LineShape::rebuildPath() const {
+  m_path.reset();
+  m_path.moveTo(x1, y1);
+  m_path.lineTo(x2, y2);
+}

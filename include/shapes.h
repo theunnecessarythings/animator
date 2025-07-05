@@ -150,6 +150,13 @@ DEFINE_SHAPE_CLASS(CircleShape, "Circle", CIRCLE_PROPERTIES)
 DEFINE_SHAPE_CLASS(RegularPolygramShape, "RegularPolygram",
                    REGULAR_POLYGRAM_PROPERTIES)
 
+#define LINE_PROPERTIES(P)                                                     \
+  P(float, x1, "X1", 0.0f)                                                     \
+  P(float, y1, "Y1", 0.0f)                                                     \
+  P(float, x2, "X2", 100.0f)                                                   \
+  P(float, y2, "Y2", 0.0f)
+DEFINE_SHAPE_CLASS(LineShape, "Line", LINE_PROPERTIES)
+
 namespace ShapeFactory {
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
@@ -158,6 +165,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<CircleShape>();
   if (kind == "RegularPolygram")
     return std::make_unique<RegularPolygramShape>();
-  return nullptr; // Or return a default shape
+  if (kind == "Line")
+    return std::make_unique<LineShape>();
+  return nullptr;
 }
 } // namespace ShapeFactory
