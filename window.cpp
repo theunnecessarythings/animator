@@ -3,9 +3,8 @@
 #include <QAction>
 #include <QMenu>
 #include <QMetaProperty>
-#include <QObject>
-
 #include <QMetaType>
+#include <QObject>
 #include <type_traits>
 
 template <typename NumWidget, typename Getter, typename Setter>
@@ -30,14 +29,14 @@ NumWidget *makeSpinBox(QWidget *parent, double min, double max, double step,
 inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
                            std::function<void(QVariant)> setter,
                            const QVariant &initial) {
-  switch (mp.type()) { // Qt 5 ⇒ use type(), not typeId()
+  switch (static_cast<int>(mp.type())) {
   case QMetaType::Float: {
     auto *w = new QDoubleSpinBox(parent);
     w->setRange(-1e6, 1e6);
     w->setDecimals(3);
     w->setValue(initial.toFloat());
     QObject::connect(w, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                     parent, [setter](double v) { setter(v); });
+                     parent, [setter](float v) { setter(v); });
     return w;
   }
   case QMetaType::Double: {
@@ -173,6 +172,13 @@ void MainWindow::createMenus() {
   // --- Help -----------------------------------------------------------
   QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
   helpMenu->addAction(tr("About"));
+
+  connect(m_undoStack, &QUndoStack::indexChanged, this, [this]() {
+    if (m_sceneTree->selectionModel()->hasSelection()) {
+      onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                              QItemSelection());
+    }
+  });
 }
 
 void MainWindow::createToolbox() {
@@ -350,16 +356,13 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     auto *edit = new QLineEdit(QString::fromStdString(n->name));
     f->addRow(tr("Name"), edit);
 
-    connect(edit, &QLineEdit::textEdited, this, [this, e](const QString &s) {
+    connect(edit, &QLineEdit::textEdited, this, [this, e, edit] {
       if (auto *n = m_canvas->scene().reg.get<NameComponent>(e)) {
         std::string oldName = n->name;
-        std::string newName = s.toStdString();
-        if (oldName == newName)
-          return;
-
-        m_undoStack->push(new ChangeNameCommand(this, e, oldName, newName));
-        n->name = newName;
-        m_sceneModel->refresh();
+        std::string newName = edit->text().toStdString();
+        if (oldName != newName) {
+          m_undoStack->push(new ChangeNameCommand(this, e, oldName, newName));
+        }
       }
     });
     m_propsLayout->addRow(g);
@@ -371,14 +374,22 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     auto *lay = new QVBoxLayout(grp);
     lay->addWidget(new QLabel(ShapeComponent::toString(s->kind)));
 
-    // visit variant and auto-build UI
     std::visit(
         [&](auto &props) {
           using P = std::decay_t<decltype(props)>;
-          // skip std::monostate
           if constexpr (!std::is_same_v<P, std::monostate>) {
-            QWidget *w =
-                buildGadgetEditor(props, this, [this] { m_canvas->update(); });
+            P initial_props = props;
+            QWidget *w = buildGadgetEditor(
+                props, this, [this, e, initial_props, &props]() {
+                  QVariant old_v, new_v;
+                  old_v.setValue(initial_props);
+                  new_v.setValue(props);
+                  if (auto *sc = m_canvas->scene().reg.get<ShapeComponent>(e)) {
+                    m_undoStack->push(new ChangeShapePropertyCommand(
+                        this, e, sc->kind, old_v.toJsonObject(),
+                        new_v.toJsonObject()));
+                  }
+                });
             lay->addWidget(w);
           }
         },
@@ -388,60 +399,63 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
   }
 
   // -------------------------------------------------------- Transform --
-  if (auto *t = scene.reg.get<TransformComponent>(e)) {
+  if (scene.reg.has<TransformComponent>(e)) {
     auto *g = new QGroupBox(tr("Transform"));
     auto *fl = new QFormLayout(g);
 
-    fl->addRow("X",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, -1000, 1000, 1, [t] { return t->x; },
-                   [this, e](double v) {
-                     if (auto *tc =
-                             m_canvas->scene().reg.get<TransformComponent>(e)) {
-                       tc->x = v;
-                       m_canvas->update();
-                     }
-                   }));
-    fl->addRow("Y",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, -1000, 1000, 1, [t] { return t->y; },
-                   [this, e](double v) {
-                     if (auto *tc =
-                             m_canvas->scene().reg.get<TransformComponent>(e)) {
-                       tc->y = v;
-                       m_canvas->update();
-                     }
-                   }));
-    fl->addRow("Rotation",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, -1e6, 1e6, 1, [t] { return t->rotation * 180 / M_PI; },
-                   [this, e](double v) {
-                     if (auto *tc =
-                             m_canvas->scene().reg.get<TransformComponent>(e)) {
-                       tc->rotation = v * M_PI / 180;
-                       m_canvas->update();
-                     }
-                   }));
-    fl->addRow("Scale X",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, -1000, 1000, 1, [t] { return t->sx; },
-                   [this, e](double v) {
-                     if (auto *tc =
-                             m_canvas->scene().reg.get<TransformComponent>(e)) {
-                       tc->sx = v;
-                       m_canvas->update();
-                     }
-                   }));
-    fl->addRow("Scale Y",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, -1000, 1000, 1, [t] { return t->sy; },
-                   [this, e](double v) {
-                     if (auto *tc =
-                             m_canvas->scene().reg.get<TransformComponent>(e)) {
-                       tc->sy = v;
-                       m_canvas->update();
-                     }
-                   }));
+    auto addEditor = [&](const QString &label, auto getter, auto setter) {
+      auto *spinbox = makeSpinBox<QDoubleSpinBox>(
+          this, -1e6, 1e6, 1,
+          [this, e, getter] {
+            if (auto *c = m_canvas->scene().reg.get<TransformComponent>(e))
+              return static_cast<double>(getter(c));
+            return 0.0;
+          },
+          [this, e, setter](double v) {
+            if (auto *tc = m_canvas->scene().reg.get<TransformComponent>(e)) {
+              auto old_tc = *tc;
+              auto new_tc = setter(*tc, v);
+              if (memcmp(&old_tc, &new_tc, sizeof(TransformComponent)) != 0) {
+                m_undoStack->push(new ChangeTransformCommand(
+                    this, e, old_tc.x, old_tc.y, old_tc.rotation, old_tc.sx,
+                    old_tc.sy, new_tc.x, new_tc.y, new_tc.rotation, new_tc.sx,
+                    new_tc.sy));
+              }
+            }
+          });
+      fl->addRow(label, spinbox);
+    };
+
+    addEditor(
+        "X", [](auto c) { return c->x; },
+        [](auto c, double v) {
+          c.x = v;
+          return c;
+        });
+    addEditor(
+        "Y", [](auto c) { return c->y; },
+        [](auto c, double v) {
+          c.y = v;
+          return c;
+        });
+    addEditor(
+        "Rotation", [](auto c) { return c->rotation * 180 / M_PI; },
+        [](auto c, double v) {
+          c.rotation = v * M_PI / 180;
+          return c;
+        });
+    addEditor(
+        "Scale X", [](auto c) { return c->sx; },
+        [](auto c, double v) {
+          c.sx = v;
+          return c;
+        });
+    addEditor(
+        "Scale Y", [](auto c) { return c->sy; },
+        [](auto c, double v) {
+          c.sy = v;
+          return c;
+        });
 
     m_propsLayout->addRow(g);
   }
@@ -458,17 +472,19 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     btn->setPalette(pal);
     btn->setAutoFillBackground(true);
 
-    connect(btn, &QPushButton::clicked, this, [this, e, btn, pal] {
-      auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e);
-      if (!mc)
-        return;
-      QColor c = QColorDialog::getColor(QColor::fromRgba(mc->color), this);
-      if (c.isValid()) {
-        mc->color = c.rgba();
-        QPalette p(pal);
-        p.setColor(QPalette::Button, c);
-        btn->setPalette(p);
-        m_canvas->update();
+    connect(btn, &QPushButton::clicked, this, [this, e] {
+      if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
+        QColor c = QColorDialog::getColor(QColor::fromRgba(mc->color), this);
+        if (c.isValid() && c.rgba() != mc->color) {
+          auto old_mc = *mc;
+          auto new_mc = *mc;
+          new_mc.color = c.rgba();
+          m_undoStack->push(new ChangeMaterialCommand(
+              this, e, old_mc.color, old_mc.isFilled, old_mc.isStroked,
+              old_mc.strokeWidth, old_mc.antiAliased, new_mc.color,
+              new_mc.isFilled, new_mc.isStroked, new_mc.strokeWidth,
+              new_mc.antiAliased));
+        }
       }
     });
     fl->addRow("Color", btn);
@@ -476,104 +492,139 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     auto makeCheck = [&](QString label, bool initial_value, auto setter) {
       auto *cb = new QCheckBox();
       cb->setChecked(initial_value);
-      connect(cb, &QCheckBox::stateChanged, this, setter);
+      connect(cb, &QCheckBox::toggled, this, [this, e, setter](bool checked) {
+        if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
+          auto old_mc = *mc;
+          auto new_mc = setter(*mc, checked);
+          m_undoStack->push(new ChangeMaterialCommand(
+              this, e, old_mc.color, old_mc.isFilled, old_mc.isStroked,
+              old_mc.strokeWidth, old_mc.antiAliased, new_mc.color,
+              new_mc.isFilled, new_mc.isStroked, new_mc.strokeWidth,
+              new_mc.antiAliased));
+        }
+      });
       fl->addRow(label, cb);
     };
-    makeCheck("Filled", m->isFilled, [this, e](int s) {
-      if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-        mc->isFilled = (s == Qt::Checked);
-        m_canvas->update();
-      }
+    makeCheck("Filled", m->isFilled, [](auto mc, bool v) {
+      mc.isFilled = v;
+      return mc;
     });
-    makeCheck("Stroked", m->isStroked, [this, e](int s) {
-      if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-        mc->isStroked = (s == Qt::Checked);
-        m_canvas->update();
-      }
+    makeCheck("Stroked", m->isStroked, [](auto mc, bool v) {
+      mc.isStroked = v;
+      return mc;
     });
-    makeCheck("AA", m->antiAliased, [this, e](int s) {
-      if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
-        mc->antiAliased = (s == Qt::Checked);
-        m_canvas->update();
-      }
+    makeCheck("AA", m->antiAliased, [](auto mc, bool v) {
+      mc.antiAliased = v;
+      return mc;
     });
 
-    fl->addRow("Stroke W",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, 0, 100, 0.1, [m] { return m->strokeWidth; },
-                   [this, e](double v) {
-                     if (auto *mc =
-                             m_canvas->scene().reg.get<MaterialComponent>(e)) {
-                       mc->strokeWidth = v;
-                       m_canvas->update();
-                     }
-                   }));
+    fl->addRow(
+        "Stroke W",
+        makeSpinBox<QDoubleSpinBox>(
+            this, 0, 100, 0.1, [m] { return m->strokeWidth; },
+            [this, e](double v) {
+              if (auto *mc = m_canvas->scene().reg.get<MaterialComponent>(e)) {
+                auto old_mc = *mc;
+                auto new_mc = *mc;
+                new_mc.strokeWidth = v;
+                m_undoStack->push(new ChangeMaterialCommand(
+                    this, e, old_mc.color, old_mc.isFilled, old_mc.isStroked,
+                    old_mc.strokeWidth, old_mc.antiAliased, new_mc.color,
+                    new_mc.isFilled, new_mc.isStroked, new_mc.strokeWidth,
+                    new_mc.antiAliased));
+              }
+            }));
     m_propsLayout->addRow(g);
   }
 
   // ------------------------------------------------------- Animation --
-  if (auto *a = scene.reg.get<AnimationComponent>(e)) {
+  if (scene.reg.has<AnimationComponent>(e)) {
     auto *g = new QGroupBox(tr("Animation"));
     auto *fl = new QFormLayout(g);
 
-    fl->addRow("Entry",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, 0, 1e3, 0.1, [a] { return a->entryTime; },
-                   [this, e](double v) {
-                     if (auto *ac =
-                             m_canvas->scene().reg.get<AnimationComponent>(e)) {
-                       ac->entryTime = v;
-                       m_canvas->update();
-                     }
-                   }));
-    fl->addRow("Exit",
-               makeSpinBox<QDoubleSpinBox>(
-                   this, 0, 1e3, 0.1, [a] { return a->exitTime; },
-                   [this, e](double v) {
-                     if (auto *ac =
-                             m_canvas->scene().reg.get<AnimationComponent>(e)) {
-                       ac->exitTime = v;
-                       m_canvas->update();
-                     }
-                   }));
+    auto addEditor = [&](const QString &label, auto getter, auto setter) {
+      auto *spinbox = makeSpinBox<QDoubleSpinBox>(
+          this, 0, 1e3, 0.1,
+          [this, e, getter] {
+            if (auto *c = m_canvas->scene().reg.get<AnimationComponent>(e))
+              return getter(c);
+            return 0.0f;
+          },
+          [this, e, setter](double v) {
+            if (auto *ac = m_canvas->scene().reg.get<AnimationComponent>(e)) {
+              auto old_ac = *ac;
+              auto new_ac = setter(*ac, v);
+              if (memcmp(&old_ac, &new_ac, sizeof(AnimationComponent)) != 0) {
+                m_undoStack->push(new ChangeAnimationCommand(
+                    this, e, old_ac.entryTime, old_ac.exitTime,
+                    new_ac.entryTime, new_ac.exitTime));
+              }
+            }
+          });
+      fl->addRow(label, spinbox);
+    };
+
+    addEditor(
+        "Entry", [](auto c) { return c->entryTime; },
+        [](auto c, double v) {
+          c.entryTime = v;
+          return c;
+        });
+    addEditor(
+        "Exit", [](auto c) { return c->exitTime; },
+        [](auto c, double v) {
+          c.exitTime = v;
+          return c;
+        });
     m_propsLayout->addRow(g);
   }
 
   // ----------------------------------------------------------- Script --
-  if (auto *sc = scene.reg.get<ScriptComponent>(e)) {
+  if (scene.reg.has<ScriptComponent>(e)) {
     auto *g = new QGroupBox(tr("Script"));
     auto *f = new QFormLayout(g);
 
-    auto makeEdit = [&](QString lbl, const std::string &initial_val,
-                        auto setter) {
-      auto *le = new QLineEdit(QString::fromStdString(initial_val));
+    auto makeEdit = [&](const QString &lbl, auto getter, auto setter) {
+      auto *le = new QLineEdit(QString::fromStdString(
+          getter(m_canvas->scene().reg.get<ScriptComponent>(e))));
       f->addRow(lbl, le);
-      connect(le, &QLineEdit::textEdited, this, setter);
+      connect(le, &QLineEdit::textEdited, this, [this, e, le, setter]() {
+        if (auto *sc = m_canvas->scene().reg.get<ScriptComponent>(e)) {
+          auto old_sc = *sc;
+          auto new_sc = setter(*sc, le->text().toStdString());
+          m_undoStack->push(new ChangeScriptCommand(
+              this, e, old_sc.scriptPath, old_sc.startFunction,
+              old_sc.updateFunction, old_sc.destroyFunction, new_sc.scriptPath,
+              new_sc.startFunction, new_sc.updateFunction,
+              new_sc.destroyFunction));
+        }
+      });
     };
-    makeEdit("Path", sc->scriptPath, [this, e](const QString &t) {
-      if (auto *s = m_canvas->scene().reg.get<ScriptComponent>(e)) {
-        s->scriptPath = t.toStdString();
-        m_canvas->update();
-      }
-    });
-    makeEdit("Start Func", sc->startFunction, [this, e](const QString &t) {
-      if (auto *s = m_canvas->scene().reg.get<ScriptComponent>(e)) {
-        s->startFunction = t.toStdString();
-        m_canvas->update();
-      }
-    });
-    makeEdit("Update Func", sc->updateFunction, [this, e](const QString &t) {
-      if (auto *s = m_canvas->scene().reg.get<ScriptComponent>(e)) {
-        s->updateFunction = t.toStdString();
-        m_canvas->update();
-      }
-    });
-    makeEdit("Destroy Func", sc->destroyFunction, [this, e](const QString &t) {
-      if (auto *s = m_canvas->scene().reg.get<ScriptComponent>(e)) {
-        s->destroyFunction = t.toStdString();
-        m_canvas->update();
-      }
-    });
+
+    makeEdit(
+        "Path", [](auto sc) { return sc->scriptPath; },
+        [](auto sc, auto v) {
+          sc.scriptPath = v;
+          return sc;
+        });
+    makeEdit(
+        "Start Func", [](auto sc) { return sc->startFunction; },
+        [](auto sc, auto v) {
+          sc.startFunction = v;
+          return sc;
+        });
+    makeEdit(
+        "Update Func", [](auto sc) { return sc->updateFunction; },
+        [](auto sc, auto v) {
+          sc.updateFunction = v;
+          return sc;
+        });
+    makeEdit(
+        "Destroy Func", [](auto sc) { return sc->destroyFunction; },
+        [](auto sc, auto v) {
+          sc.destroyFunction = v;
+          return sc;
+        });
     m_propsLayout->addRow(g);
   }
 }
