@@ -102,8 +102,9 @@ private:
   QSlider *m_timelineSlider = nullptr;
   QTimer *m_animationTimer = nullptr;
   QUndoStack *m_undoStack = nullptr;
-  QList<Entity> m_selectedEntities; 
+  QList<Entity> m_selectedEntities;
   bool m_isPlaying = false;
   float m_currentTime = 0.0f;
   float m_animationDuration = 5.0f; // Default animation duration
+  bool m_isUpdatingFromUI = false;
 };

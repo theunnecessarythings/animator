@@ -232,6 +232,32 @@ void ChangeTransformCommand::redo() {
   }
 }
 
+bool ChangeTransformCommand::mergeWith(const QUndoCommand *other) {
+  // Ensure the other command is the same type
+  if (other->id() != Id) {
+    return false;
+  }
+
+  // Cast it to our specific type
+  const auto *otherCmd = static_cast<const ChangeTransformCommand *>(other);
+
+  // Ensure it's for the same entity
+  if (m_entity != otherCmd->m_entity) {
+    return false;
+  }
+
+  // It's a match! Absorb the "new" state from the other command.
+  // Our own "old" state is preserved, representing the true beginning of the
+  // action.
+  m_newX = otherCmd->m_newX;
+  m_newY = otherCmd->m_newY;
+  m_newRotation = otherCmd->m_newRotation;
+  m_newSx = otherCmd->m_newSx;
+  m_newSy = otherCmd->m_newSy;
+
+  // Return true to tell the undo stack the merge was successful.
+  return true;
+}
 // ChangeMaterialCommand
 ChangeMaterialCommand::ChangeMaterialCommand(
     MainWindow *window, Entity entity, SkColor oldColor, bool oldIsFilled,

@@ -399,68 +399,78 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
   }
 
   // -------------------------------------------------------- Transform --
-  if (scene.reg.has<TransformComponent>(e)) {
+  if (auto *tc = scene.reg.get<TransformComponent>(e)) {
     auto *g = new QGroupBox(tr("Transform"));
     auto *fl = new QFormLayout(g);
 
     auto addEditor = [&](const QString &label, auto getter, auto setter) {
-      auto *spinbox = makeSpinBox<QDoubleSpinBox>(
-          this, -1e6, 1e6, 1,
-          [this, e, getter] {
-            if (auto *c = m_canvas->scene().reg.get<TransformComponent>(e))
-              return static_cast<double>(getter(c));
-            return 0.0;
-          },
-          [this, e, setter](double v) {
-            if (auto *tc = m_canvas->scene().reg.get<TransformComponent>(e)) {
-              auto old_tc = *tc;
-              auto new_tc = setter(*tc, v);
-              if (memcmp(&old_tc, &new_tc, sizeof(TransformComponent)) != 0) {
+      auto *spinbox = new QDoubleSpinBox(this);
+      spinbox->setRange(-10000, 10000);
+      spinbox->setDecimals(3);
+      spinbox->setValue(getter(tc));
+
+      // This flag tells us when to capture the component's "before" state.
+      auto isNewInteraction = std::make_shared<bool>(true);
+
+      // A place to store the state at the start of the interaction.
+      auto stateOnBegin = std::make_shared<TransformComponent>();
+
+      // When the user finishes typing and hits Enter or clicks away, we reset
+      // the flag. This prepares us for the *next* separate interaction.
+      connect(spinbox, &QDoubleSpinBox::editingFinished, this,
+              [isNewInteraction]() { *isNewInteraction = true; });
+
+      connect(spinbox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+              this,
+              [this, e, tc, setter, stateOnBegin,
+               isNewInteraction](double currentValue) {
+                // If this is the start of a new interaction (typing or
+                // scrolling), capture the "before" state and set the flag to
+                // false.
+                if (*isNewInteraction) {
+                  *stateOnBegin = *tc;
+                  *isNewInteraction = false;
+                }
+
+                // Create what the "after" state will be.
+                TransformComponent newState = *stateOnBegin;
+
+                setter(newState, currentValue);
+                m_isUpdatingFromUI = true;
+                setter(*tc, currentValue);
+                m_canvas->update();
+                m_isUpdatingFromUI = false;
+
+                // Push a new, mergeable command.
+                // It correctly uses the state we captured at the very
+                // beginning.
                 m_undoStack->push(new ChangeTransformCommand(
-                    this, e, old_tc.x, old_tc.y, old_tc.rotation, old_tc.sx,
-                    old_tc.sy, new_tc.x, new_tc.y, new_tc.rotation, new_tc.sx,
-                    new_tc.sy));
-              }
-            }
-          });
+                    this, e, stateOnBegin->x, stateOnBegin->y,
+                    stateOnBegin->rotation, stateOnBegin->sx, stateOnBegin->sy,
+                    newState.x, newState.y, newState.rotation, newState.sx,
+                    newState.sy));
+              });
+
       fl->addRow(label, spinbox);
     };
 
+    // The getter/setter lambdas remain the same.
     addEditor(
-        "X", [](auto c) { return c->x; },
-        [](auto c, double v) {
-          c.x = v;
-          return c;
-        });
+        "X", [](auto *c) { return c->x; }, [](auto &c, double v) { c.x = v; });
     addEditor(
-        "Y", [](auto c) { return c->y; },
-        [](auto c, double v) {
-          c.y = v;
-          return c;
-        });
+        "Y", [](auto *c) { return c->y; }, [](auto &c, double v) { c.y = v; });
     addEditor(
-        "Rotation", [](auto c) { return c->rotation * 180 / M_PI; },
-        [](auto c, double v) {
-          c.rotation = v * M_PI / 180;
-          return c;
-        });
+        "Rotation", [](auto *c) { return c->rotation * 180.0 / M_PI; },
+        [](auto &c, double v) { c.rotation = v * M_PI / 180.0; });
     addEditor(
-        "Scale X", [](auto c) { return c->sx; },
-        [](auto c, double v) {
-          c.sx = v;
-          return c;
-        });
+        "Scale X", [](auto *c) { return c->sx; },
+        [](auto &c, double v) { c.sx = v; });
     addEditor(
-        "Scale Y", [](auto c) { return c->sy; },
-        [](auto c, double v) {
-          c.sy = v;
-          return c;
-        });
+        "Scale Y", [](auto *c) { return c->sy; },
+        [](auto &c, double v) { c.sy = v; });
 
     m_propsLayout->addRow(g);
-  }
-
-  // --------------------------------------------------------- Material --
+  } // --------------------------------------------------------- Material --
   if (auto *m = scene.reg.get<MaterialComponent>(e)) {
     auto *g = new QGroupBox(tr("Material"));
     auto *fl = new QFormLayout(g);
@@ -678,6 +688,11 @@ void MainWindow::onSaveFile() {
 }
 
 void MainWindow::onTransformChanged(Entity entity) {
+  // If the UI is the source of the change, do not refresh it.
+  if (m_isUpdatingFromUI) {
+    return;
+  }
+
   // Get the currently selected index from the scene tree
   QModelIndexList selectedIndexes =
       m_sceneTree->selectionModel()->selectedIndexes();
@@ -693,7 +708,6 @@ void MainWindow::onTransformChanged(Entity entity) {
     }
   }
 }
-
 void MainWindow::onCut() {
   if (m_selectedEntities.isEmpty()) {
     return;

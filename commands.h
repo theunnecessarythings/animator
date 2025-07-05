@@ -97,6 +97,8 @@ private:
 
 class ChangeTransformCommand : public QUndoCommand {
 public:
+  enum { Id = 1234 };
+
   ChangeTransformCommand(MainWindow *window, Entity entity, float oldX,
                          float oldY, float oldRotation, float oldSx,
                          float oldSy, float newX, float newY, float newRotation,
@@ -104,6 +106,9 @@ public:
                          QUndoCommand *parent = nullptr);
   void undo() override;
   void redo() override;
+
+  int id() const override { return Id; }
+  bool mergeWith(const QUndoCommand *other) override;
 
 private:
   MainWindow *m_mainWindow;
