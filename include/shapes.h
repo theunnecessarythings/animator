@@ -1,3 +1,4 @@
+
 #pragma once
 
 #include "ecs.h"
@@ -9,13 +10,19 @@
 #include <QWidget>
 
 #include "include/core/SkCanvas.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPoint.h"
 #include "include/core/SkRect.h"
 
+#include <cmath>
 #include <functional>
 #include <memory>
 
 class MainWindow;
 
+//==============================================================================
+// Shape Base Class (Interface)
+//==============================================================================
 class Shape {
 public:
   virtual ~Shape() = default;
@@ -33,8 +40,10 @@ public:
     }
     paint.setStrokeWidth(material.strokeWidth);
 
-    drawShape(canvas, paint);
+    canvas->drawPath(getPath(), paint);
   }
+
+  SkRect getBoundingBox() const { return getPath().getBounds(); }
 
   virtual const char *getKindName() const = 0;
   virtual QWidget *
@@ -43,15 +52,15 @@ public:
   virtual QJsonObject serialize() const = 0;
   virtual void deserialize(const QJsonObject &props) = 0;
   virtual std::unique_ptr<Shape> clone() const = 0;
-  virtual SkRect getBoundingBox() const = 0;
 
 protected:
-  virtual void drawShape(SkCanvas *canvas, const SkPaint &paint) const = 0;
+  virtual void rebuildPath() const = 0;
+
   void addNumericProperty(QFormLayout *layout, QWidget *parent,
                           const char *label, double value,
                           std::function<void(double)> onValueChanged) {
     auto *spinBox = new QDoubleSpinBox(parent);
-    spinBox->setRange(0, 10000);
+    spinBox->setRange(-10000, 10000);
     spinBox->setDecimals(2);
     spinBox->setValue(value);
     QObject::connect(spinBox,
@@ -59,110 +68,87 @@ protected:
                      parent, onValueChanged);
     layout->addRow(label, spinBox);
   }
+
+  const SkPath &getPath() const {
+    if (m_isDirty) {
+      rebuildPath();
+      m_isDirty = false;
+    }
+    return m_path;
+  }
+
+  mutable SkPath m_path;
+  mutable bool m_isDirty = true;
 };
 
-class RectangleShape : public Shape {
-public:
-  const char *getKindName() const override { return "Rectangle"; }
+//==============================================================================
+// Macros for Code Generation
+//==============================================================================
+#define DECLARE_PROPERTY(type, name, json_name, default_value)                 \
+  type name = default_value;
+#define SERIALIZE_PROPERTY(type, name, json_name, default_value)               \
+  props[json_name] = name;
 
-  QWidget *
-  createPropertyEditor(QWidget *parent,
-                       std::function<void(QJsonObject)> onChange) override {
-    auto *form = new QFormLayout();
-    addNumericProperty(form, parent, "Width", width,
-                       [this, onChange](double v) {
-                         this->width = v;
-                         if (onChange)
-                           onChange(this->serialize());
-                       });
-    addNumericProperty(form, parent, "Height", height,
-                       [this, onChange](double v) {
-                         this->height = v;
-                         if (onChange)
-                           onChange(this->serialize());
-                       });
+#define DESERIALIZE_PROPERTY(type, name, json_name, default_value)             \
+  name = props.value(json_name).toDouble(default_value);
+#define EDITOR_PROPERTY(type, name, json_name, default_value)                  \
+  addNumericProperty(form, parent, json_name, name,                            \
+                     [this, onChange](double v) {                              \
+                       this->name = v;                                         \
+                       this->markDirty();                                      \
+                       if (onChange)                                           \
+                         onChange(this->serialize());                          \
+                     });
 
-    auto *box = new QWidget(parent);
-    box->setLayout(form);
-    return box;
-  }
+#define DEFINE_SHAPE_CLASS(ClassName, KindNameString, PROPERTIES_MACRO)        \
+  class ClassName : public Shape {                                             \
+  public:                                                                      \
+    ClassName() { markDirty(); } /* Ensure path is built on creation */        \
+    const char *getKindName() const override { return KindNameString; }        \
+    std::unique_ptr<Shape> clone() const override {                            \
+      return std::make_unique<ClassName>(*this);                               \
+    }                                                                          \
+    QWidget *                                                                  \
+    createPropertyEditor(QWidget *parent,                                      \
+                         std::function<void(QJsonObject)> onChange) override { \
+      auto *form = new QFormLayout();                                          \
+      PROPERTIES_MACRO(EDITOR_PROPERTY)                                        \
+      auto *box = new QWidget(parent);                                         \
+      box->setLayout(form);                                                    \
+      return box;                                                              \
+    }                                                                          \
+    QJsonObject serialize() const override {                                   \
+      QJsonObject props;                                                       \
+      PROPERTIES_MACRO(SERIALIZE_PROPERTY)                                     \
+      return props;                                                            \
+    }                                                                          \
+    void deserialize(const QJsonObject &props) override {                      \
+      PROPERTIES_MACRO(DESERIALIZE_PROPERTY)                                   \
+      markDirty();                                                             \
+    }                                                                          \
+                                                                               \
+  protected:                                                                   \
+    void rebuildPath() const override;                                         \
+    void markDirty() { m_isDirty = true; }                                     \
+                                                                               \
+  private:                                                                     \
+    PROPERTIES_MACRO(DECLARE_PROPERTY)                                         \
+  };
+#define RECTANGLE_PROPERTIES(P)                                                \
+  P(float, width, "Width", 100.0f)                                             \
+  P(float, height, "Height", 60.0f)
+DEFINE_SHAPE_CLASS(RectangleShape, "Rectangle", RECTANGLE_PROPERTIES)
 
-  QJsonObject serialize() const override {
-    QJsonObject props;
-    props["width"] = width;
-    props["height"] = height;
-    return props;
-  }
+#define CIRCLE_PROPERTIES(P) P(float, radius, "Radius", 50.0f)
+DEFINE_SHAPE_CLASS(CircleShape, "Circle", CIRCLE_PROPERTIES)
 
-  void deserialize(const QJsonObject &props) override {
-    width = props.value("width").toDouble(100.0);
-    height = props.value("height").toDouble(60.0);
-  }
-
-  std::unique_ptr<Shape> clone() const override {
-    return std::make_unique<RectangleShape>(*this);
-  }
-
-  SkRect getBoundingBox() const override {
-    return SkRect::MakeWH(width, height);
-  }
-
-protected:
-  void drawShape(SkCanvas *canvas, const SkPaint &paint) const override {
-    canvas->drawRect(SkRect::MakeWH(width, height), paint);
-  }
-
-private:
-  float width = 100.0f;
-  float height = 60.0f;
-};
-
-class CircleShape : public Shape {
-public:
-  const char *getKindName() const override { return "Circle"; }
-
-  QWidget *
-  createPropertyEditor(QWidget *parent,
-                       std::function<void(QJsonObject)> onChange) override {
-    auto *form = new QFormLayout();
-    addNumericProperty(form, parent, "Radius", radius,
-                       [this, onChange](double v) {
-                         this->radius = v;
-                         if (onChange)
-                           onChange(this->serialize());
-                       });
-
-    auto *box = new QWidget(parent);
-    box->setLayout(form);
-    return box;
-  }
-
-  QJsonObject serialize() const override {
-    QJsonObject props;
-    props["radius"] = radius;
-    return props;
-  }
-
-  void deserialize(const QJsonObject &props) override {
-    radius = props.value("radius").toDouble(50.0);
-  }
-
-  std::unique_ptr<Shape> clone() const override {
-    return std::make_unique<CircleShape>(*this);
-  }
-
-  SkRect getBoundingBox() const override {
-    return SkRect::MakeLTRB(-radius, -radius, radius, radius);
-  }
-
-protected:
-  void drawShape(SkCanvas *canvas, const SkPaint &paint) const override {
-    canvas->drawCircle(0, 0, radius, paint);
-  }
-
-private:
-  float radius = 50.0f;
-};
+#define REGULAR_POLYGRAM_PROPERTIES(P)                                         \
+  P(int, num_vertices, "Num Vertices", 5)                                      \
+  P(float, radius, "Radius", 50.0f)                                            \
+  P(int, density, "Density", 1)                                                \
+  P(float, start_angle, "Start Angle", 0.0f)
+DEFINE_SHAPE_CLASS(RegularPolygramShape, "RegularPolygram",
+                   REGULAR_POLYGRAM_PROPERTIES)
 
 namespace ShapeFactory {
 inline std::unique_ptr<Shape> create(const std::string &kind) {
@@ -170,6 +156,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<RectangleShape>();
   if (kind == "Circle")
     return std::make_unique<CircleShape>();
+  if (kind == "RegularPolygram")
+    return std::make_unique<RegularPolygramShape>();
   return nullptr; // Or return a default shape
 }
 } // namespace ShapeFactory

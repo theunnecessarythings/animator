@@ -206,7 +206,7 @@ void MainWindow::createSceneDock() {
 
   m_sceneTree = tree;
   sceneDock->setWidget(tree);
-  sceneDock->setMaximumHeight(200); // Decrease height of outline
+  sceneDock->setMaximumHeight(200);
   addDockWidget(Qt::RightDockWidgetArea, sceneDock);
 
   connect(m_canvas, &SkiaCanvasWidget::sceneChanged, m_sceneModel,
@@ -232,7 +232,7 @@ void MainWindow::createPropertiesDock() {
   propWidget->setLayout(m_propsLayout);
 
   propDock->setWidget(propWidget);
-  propDock->setMinimumHeight(400); // Increase height of properties window
+  propDock->setMinimumHeight(400);
   addDockWidget(Qt::RightDockWidgetArea, propDock);
 }
 
@@ -290,24 +290,22 @@ void MainWindow::onStopResetButtonClicked() {
   m_playPauseButton->setText("Play");
   m_currentTime = 0.0f;
   m_canvas->setCurrentTime(m_currentTime);
-  resetScene(); // Reset the scene to its initial state
+  resetScene();
   m_canvas->update();
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
 }
 
 void MainWindow::onAnimationTimerTimeout() {
-  m_currentTime +=
-      m_animationTimer->interval() / 1000.0f; // Convert ms to seconds
+  m_currentTime += m_animationTimer->interval() / 1000.0f;
   if (m_currentTime > m_animationDuration) {
-    resetScene();         // Reset the scene when animation loops
-    m_currentTime = 0.0f; // Loop back to start
+    resetScene();
+    m_currentTime = 0.0f;
   }
   m_canvas->setCurrentTime(m_currentTime);
   m_canvas->update();
-  m_canvas->scene().scriptSystem.tick(
-      m_animationTimer->interval() / 1000.0f,
-      m_currentTime); // Pass delta time and current time
+  m_canvas->scene().scriptSystem.tick(m_animationTimer->interval() / 1000.0f,
+                                      m_currentTime);
   m_timelineSlider->setValue(static_cast<int>(m_currentTime * 100));
   updateTimeDisplay();
 }
@@ -375,16 +373,10 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
       auto *lay = new QVBoxLayout(grp);
       lay->addWidget(new QLabel(s->shape->getKindName()));
 
-      // REMOVE the std::visit block and REPLACE with this:
       QWidget *editor = s->shape->createPropertyEditor(
-          this,
-          /*onChange lambda*/ [this, e](QJsonObject new_props) {
+          this, [this, e](QJsonObject new_props) {
             if (auto *sc = m_canvas->scene().reg.get<ShapeComponent>(e)) {
-              // We need the "old" properties for the undo command
               QJsonObject old_props = sc->shape->serialize();
-
-              // Note: The editor already updated the shape, so we just
-              // need to push the command and update the canvas.
               m_undoStack->push(new ChangeShapePropertyCommand(
                   this, e, old_props, new_props));
               m_canvas->update();
@@ -807,4 +799,21 @@ void MainWindow::resetScene() {
     onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
                             QItemSelection());
   }
+}
+
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent), m_canvas(new SkiaCanvasWidget(this)),
+      m_undoStack(new QUndoStack(this)), m_isPlaying(false),
+      m_currentTime(0.0f), m_animationDuration(10.0f),
+      m_isUpdatingFromUI(false) {
+  setCentralWidget(m_canvas);
+
+  createMenus();
+  createToolbox();
+  createSceneDock();
+  createPropertiesDock();
+  createTimelineDock();
+
+  connect(m_canvas, &SkiaCanvasWidget::sceneChanged, this,
+          [this]() { m_sceneModel->refresh(); });
 }

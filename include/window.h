@@ -36,18 +36,11 @@
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
-  explicit MainWindow(QWidget *parent = nullptr)
-      : QMainWindow(parent), m_undoStack(new QUndoStack(this)) {
-    m_canvas = new SkiaCanvasWidget(this);
-    setCentralWidget(m_canvas);
+  explicit MainWindow(QWidget *parent = nullptr);
 
-    createMenus();
-    createToolbox();
-    createSceneDock();
-    createPropertiesDock();
-    createTimelineDock();
-
-    setWindowTitle(tr("Animation Studio"));
+  ~MainWindow() {
+    disconnect(m_sceneTree->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onSceneSelectionChanged);
+    m_canvas->scene().clear();
   }
 
   SkiaCanvasWidget *canvas() const { return m_canvas; }
