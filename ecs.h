@@ -21,7 +21,6 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
-#include "qdebug.h"
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -62,6 +61,7 @@ using Entity = uint32_t;
 static constexpr Entity kInvalidEntity = 0;
 
 struct Scene;
+
 class ComponentRegistry {
 public:
   using Fn = std::function<void(Scene &, Entity, const QJsonValue &)>;
@@ -459,96 +459,8 @@ private:
   ScriptingEngine &scriptEngine_;
 };
 
-class RenderSystem {
-public:
-  explicit RenderSystem(Registry &r) : reg_(r) {}
+#include "render.h"
 
-  void render(SkCanvas *canvas, float currentTime) {
-    std::vector<Entity> backgroundEntities;
-    std::vector<Entity> foregroundEntities;
-
-    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &) {
-      if (reg_.has<SceneBackgroundComponent>(ent)) {
-        backgroundEntities.push_back(ent);
-      } else {
-        foregroundEntities.push_back(ent);
-      }
-    });
-
-    for (Entity ent : backgroundEntities) {
-      if (auto *tr = reg_.get<TransformComponent>(ent)) {
-        renderEntity(canvas, currentTime, ent, *tr);
-      }
-    }
-
-    for (Entity ent : foregroundEntities) {
-      if (auto *tr = reg_.get<TransformComponent>(ent)) {
-        renderEntity(canvas, currentTime, ent, *tr);
-      }
-    }
-  }
-
-private:
-  void renderEntity(SkCanvas *canvas, float currentTime, Entity ent,
-                    TransformComponent &tr) {
-    auto *shape = reg_.get<ShapeComponent>(ent);
-    if (!shape)
-      return;
-
-    auto *material = reg_.get<MaterialComponent>(ent);
-    if (!material)
-      return;
-
-    auto *animation = reg_.get<AnimationComponent>(ent);
-    if (animation && (currentTime < animation->entryTime ||
-                      currentTime > animation->exitTime)) {
-      return; // Don't render if outside entry/exit times
-    }
-
-    SkPaint paint;
-    paint.setAntiAlias(material->antiAliased);
-    paint.setColor(material->color);
-    if (material->isFilled && material->isStroked) {
-      paint.setStyle(SkPaint::kStrokeAndFill_Style);
-    } else if (material->isFilled) {
-      paint.setStyle(SkPaint::kFill_Style);
-    } else if (material->isStroked) {
-      paint.setStyle(SkPaint::kStroke_Style);
-    } else {
-      paint.setStyle(SkPaint::kFill_Style);
-    }
-    paint.setStrokeWidth(material->strokeWidth);
-
-    canvas->save();
-    canvas->translate(tr.x, tr.y);
-    canvas->rotate(tr.rotation * 180 / M_PI);
-    canvas->scale(tr.sx, tr.sy);
-
-    switch (shape->kind) {
-    case ShapeComponent::Kind::Rectangle: {
-      const auto &rectProps = std::get<RectangleProperties>(shape->properties);
-      canvas->drawRect({0, 0, rectProps.width, rectProps.height}, paint);
-      break;
-    }
-    case ShapeComponent::Kind::Circle: {
-      const auto &circleProps = std::get<CircleProperties>(shape->properties);
-      canvas->drawCircle(0, 0, circleProps.radius, paint);
-      break;
-    }
-    default:
-      qWarning() << "RenderSystem: Unsupported shape kind for rendering: "
-                 << ShapeComponent::toString(shape->kind);
-      break;
-    }
-    canvas->restore();
-  }
-
-  Registry &reg_;
-};
-
-// -----------------------------------------------------------------------------
-//  Convenience: Scene façade to tuck into MainWindow / canvas
-// -----------------------------------------------------------------------------
 struct Scene {
   Registry reg;
   ScriptingEngine scriptEngine;
@@ -556,9 +468,7 @@ struct Scene {
   RenderSystem renderer;
   std::map<ShapeComponent::Kind, int> kindCounters;
 
-  Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {
-    // Default background creation can be handled by MainWindow on new scene
-  }
+  Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {}
 
   Entity createShape(ShapeComponent::Kind k, float x, float y) {
     Entity e = reg.create();
