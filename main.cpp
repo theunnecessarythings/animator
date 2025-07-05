@@ -16,12 +16,9 @@ int main(int argc, char **argv) {
   MainWindow w;
   w.resize(1024, 768);
 
-  // Create background
   w.canvas()->scene().createBackground(w.width(), w.height());
 
-  // Create a circle and assign the bouncing_ball script
-  Entity circleEntity =
-      w.canvas()->scene().createShape(ShapeComponent::Kind::Circle, 100, 100);
+  Entity circleEntity = w.canvas()->scene().createShape("Circle", 100, 100);
   if (auto *script =
           w.canvas()->scene().reg.get<ScriptComponent>(circleEntity)) {
     script->scriptPath = "../scripts/bouncing_ball.lua";

@@ -7,7 +7,7 @@
 #include <QUndoCommand>
 
 // Forward declaration
-class Scene;
+struct Scene;
 class MainWindow;
 
 class AddEntityCommand : public QUndoCommand {
@@ -181,7 +181,6 @@ private:
 class ChangeShapePropertyCommand : public QUndoCommand {
 public:
   ChangeShapePropertyCommand(MainWindow *window, Entity entity,
-                             ShapeComponent::Kind kind,
                              const QJsonObject &oldProperties,
                              const QJsonObject &newProperties,
                              QUndoCommand *parent = nullptr);
@@ -191,7 +190,6 @@ public:
 private:
   MainWindow *m_mainWindow;
   Entity m_entity;
-  ShapeComponent::Kind m_kind;
   QJsonObject m_oldProperties;
   QJsonObject m_newProperties;
 };

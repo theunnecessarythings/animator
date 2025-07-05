@@ -370,32 +370,29 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
   // -------------------------------------------------------------- Shape --
   if (auto *s = scene.reg.get<ShapeComponent>(e)) {
-    auto *grp = new QGroupBox(tr("Shape"));
-    auto *lay = new QVBoxLayout(grp);
-    lay->addWidget(new QLabel(ShapeComponent::toString(s->kind)));
+    if (s->shape) {
+      auto *grp = new QGroupBox(tr("Shape"));
+      auto *lay = new QVBoxLayout(grp);
+      lay->addWidget(new QLabel(s->shape->getKindName()));
 
-    std::visit(
-        [&](auto &props) {
-          using P = std::decay_t<decltype(props)>;
-          if constexpr (!std::is_same_v<P, std::monostate>) {
-            P initial_props = props;
-            QWidget *w = buildGadgetEditor(
-                props, this, [this, e, initial_props, &props]() {
-                  QVariant old_v, new_v;
-                  old_v.setValue(initial_props);
-                  new_v.setValue(props);
-                  if (auto *sc = m_canvas->scene().reg.get<ShapeComponent>(e)) {
-                    m_undoStack->push(new ChangeShapePropertyCommand(
-                        this, e, sc->kind, old_v.toJsonObject(),
-                        new_v.toJsonObject()));
-                  }
-                });
-            lay->addWidget(w);
-          }
-        },
-        s->properties);
+      // REMOVE the std::visit block and REPLACE with this:
+      QWidget *editor = s->shape->createPropertyEditor(
+          this,
+          /*onChange lambda*/ [this, e](QJsonObject new_props) {
+            if (auto *sc = m_canvas->scene().reg.get<ShapeComponent>(e)) {
+              // We need the "old" properties for the undo command
+              QJsonObject old_props = sc->shape->serialize();
 
-    m_propsLayout->addRow(grp);
+              // Note: The editor already updated the shape, so we just
+              // need to push the command and update the canvas.
+              m_undoStack->push(new ChangeShapePropertyCommand(
+                  this, e, old_props, new_props));
+              m_canvas->update();
+            }
+          });
+      lay->addWidget(editor);
+      m_propsLayout->addRow(grp);
+    }
   }
 
   // -------------------------------------------------------- Transform --

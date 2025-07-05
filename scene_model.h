@@ -46,36 +46,30 @@ public:
                 int role = Qt::DisplayRole) const override {
     if (!idx.isValid())
       return {};
+
     Entity e = entities_[idx.row()];
+
     if (role == Qt::DisplayRole) {
       if (auto *name = scene_->reg.get<NameComponent>(e)) {
         return QString::fromStdString(name->name);
       }
       return QString("Entity %1").arg(e);
     } else if (role == ShapePropertiesRole) {
-      if (auto *shape = scene_->reg.get<ShapeComponent>(e)) {
-        QVariantMap properties;
-        if (shape->kind == ShapeComponent::Kind::Rectangle) {
-          if (auto *rectProps = std::get_if<RectangleProperties>(&shape->properties)) {
-            properties["width"] = rectProps->width;
-            properties["height"] = rectProps->height;
-            properties["grid_xstep"] = rectProps->grid_xstep;
-            properties["grid_ystep"] = rectProps->grid_ystep;
-          }
-        } else if (shape->kind == ShapeComponent::Kind::Circle) {
-          if (auto *circleProps = std::get_if<CircleProperties>(&shape->properties)) {
-            properties["radius"] = circleProps->radius;
-          }
+      if (auto *shapeComp = scene_->reg.get<ShapeComponent>(e)) {
+        if (shapeComp->shape) {
+          return shapeComp->shape->serialize();
         }
-        return properties;
       }
     } else if (role == ScriptPropertiesRole) {
       if (auto *script = scene_->reg.get<ScriptComponent>(e)) {
         QVariantMap properties;
         properties["scriptPath"] = QString::fromStdString(script->scriptPath);
-        properties["startFunction"] = QString::fromStdString(script->startFunction);
-        properties["updateFunction"] = QString::fromStdString(script->updateFunction);
-        properties["destroyFunction"] = QString::fromStdString(script->destroyFunction);
+        properties["startFunction"] =
+            QString::fromStdString(script->startFunction);
+        properties["updateFunction"] =
+            QString::fromStdString(script->updateFunction);
+        properties["destroyFunction"] =
+            QString::fromStdString(script->destroyFunction);
         return properties;
       }
     }

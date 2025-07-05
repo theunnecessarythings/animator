@@ -67,11 +67,12 @@ inline QJsonObject serializeEntity(const Scene &scene, Entity e) {
 
   // ---------- ShapeComponent ----------------------------------------------
   if (auto *sh = scene.reg.get<ShapeComponent>(e)) {
-    QJsonObject shape;
-    shape["kind"] = static_cast<int>(sh->kind);
-    shape["properties"] = sh->getProperties().toJsonObject();
-    entityObj["ShapeComponent"] = shape;
+    if (sh->shape) {
+      QJsonObject shapeObject;
+      shapeObject["kind"] = sh->shape->getKindName();
+      shapeObject["properties"] = sh->shape->serialize();
+      entityObj["ShapeComponent"] = shapeObject;
+    }
   }
-
   return entityObj;
 }

@@ -12,8 +12,8 @@ public:
     setDragEnabled(true);
     setDragDropMode(QAbstractItemView::DragOnly);
 
-    addTool("Rectangle", QIcon(":/icons/rect.svg"), "shape/rect");
-    addTool("Circle", QIcon(":/icons/circle.svg"), "shape/circle");
+    addTool("Rectangle", QIcon(":/icons/rect.svg"), "Rectangle");
+    addTool("Circle", QIcon(":/icons/circle.svg"), "Circle");
   }
 
 protected:

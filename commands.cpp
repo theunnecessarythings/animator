@@ -3,14 +3,12 @@
 #include "serialization.h"
 #include "window.h"
 
-// serialise a single entity
 inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
   return serializeEntity(scene, e);
 }
 
 // restore into *exactly the same handle* if possible
 inline void restoreInto(Scene &scene, Entity e, const QJsonObject &json) {
-  // rebuild all components on top of the existing handle
   scene.reg.destroy(e);
   ComponentRegistry::instance().apply(scene, e, json);
 }
@@ -370,27 +368,29 @@ void ChangeScriptCommand::redo() {
 
 // ChangeShapePropertyCommand
 ChangeShapePropertyCommand::ChangeShapePropertyCommand(
-    MainWindow *window, Entity entity, ShapeComponent::Kind kind,
-    const QJsonObject &oldProperties, const QJsonObject &newProperties,
-    QUndoCommand *parent)
+    MainWindow *window, Entity entity, const QJsonObject &oldProperties,
+    const QJsonObject &newProperties, QUndoCommand *parent)
     : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_kind(kind), m_oldProperties(oldProperties),
-      m_newProperties(newProperties) {
-  setText(QObject::tr("Change Entity Shape Property"));
+      m_oldProperties(oldProperties), m_newProperties(newProperties) {
+  setText(QObject::tr("Change Shape Property"));
 }
 
 void ChangeShapePropertyCommand::undo() {
   if (auto *shapeComp =
           m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
-    shapeComp->setProperties(m_oldProperties);
-    m_mainWindow->canvas()->update();
+    if (shapeComp->shape) {
+      shapeComp->shape->deserialize(m_oldProperties);
+      m_mainWindow->canvas()->update();
+    }
   }
 }
 
 void ChangeShapePropertyCommand::redo() {
   if (auto *shapeComp =
           m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
-    shapeComp->setProperties(m_newProperties);
-    m_mainWindow->canvas()->update();
+    if (shapeComp->shape) {
+      shapeComp->shape->deserialize(m_newProperties);
+      m_mainWindow->canvas()->update();
+    }
   }
 }

@@ -121,76 +121,24 @@ struct TransformComponent {
   float sx = 1.f, sy = 1.f; // scale
 };
 
-// Shape-specific properties
-struct RectangleProperties {
-  Q_GADGET
-  Q_PROPERTY(float width MEMBER width)
-  Q_PROPERTY(float height MEMBER height)
-  Q_PROPERTY(float grid_xstep MEMBER grid_xstep)
-  Q_PROPERTY(float grid_ystep MEMBER grid_ystep)
-public:
-  float width = 100.0f;
-  float height = 60.0f;
-  float grid_xstep = 10.0f;
-  float grid_ystep = 10.0f;
-};
-Q_DECLARE_METATYPE(RectangleProperties);
-
-struct CircleProperties {
-  Q_GADGET
-  Q_PROPERTY(float radius MEMBER radius)
-public:
-  float radius = 50.0f;
-};
-Q_DECLARE_METATYPE(CircleProperties);
+#include "shapes.h"
 
 struct ShapeComponent {
-  Q_GADGET
-  Q_PROPERTY(Kind kind MEMBER kind)
-  Q_PROPERTY(QVariant properties READ getProperties WRITE setProperties)
-public:
-  enum class Kind { Rectangle, Circle };
-  Kind kind;
-  std::variant<std::monostate, RectangleProperties, CircleProperties>
-      properties; // Add other shape properties here as they are defined
+  std::unique_ptr<Shape> shape;
+  ShapeComponent() = default;
+  ShapeComponent(ShapeComponent &&other) noexcept = default;
+  ShapeComponent &operator=(ShapeComponent &&other) noexcept = default;
 
-  QVariant getProperties() const {
-    return std::visit(
-        [](auto &&arg) -> QVariant {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr (std::is_same_v<T, std::monostate>) {
-            return QVariant();
-          } else {
-            QJsonObject obj;
-            const QMetaObject metaObject = T::staticMetaObject;
-            for (int i = metaObject.propertyOffset();
-                 i < metaObject.propertyCount(); ++i) {
-              QMetaProperty metaProperty = metaObject.property(i);
-              obj[metaProperty.name()] =
-                  QJsonValue::fromVariant(metaProperty.readOnGadget(&arg));
-            }
-            return obj;
-          }
-        },
-        properties);
-  }
-
-  void setProperties(const QVariant &value) {
-    if (value.canConvert<RectangleProperties>()) {
-      properties = value.value<RectangleProperties>();
-    } else if (value.canConvert<CircleProperties>()) {
-      properties = value.value<CircleProperties>();
+  ShapeComponent(const ShapeComponent &other) {
+    if (other.shape) {
+      shape = other.shape->clone();
     }
   }
-
-  static const char *toString(Kind k) {
-    switch (k) {
-    case Kind::Rectangle:
-      return "Rectangle";
-    case Kind::Circle:
-      return "Circle";
+  ShapeComponent &operator=(const ShapeComponent &other) {
+    if (this != &other) {
+      shape = other.shape ? other.shape->clone() : nullptr;
     }
-    return "";
+    return *this;
   }
 };
 
@@ -331,13 +279,6 @@ private:
       pools_;
 };
 
-// -----------------------------------------------------------------------------
-//  Example components – keep it trivial for now
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-//  RenderSystem – draws entities with {Transform, Shape} via Skia
-// -----------------------------------------------------------------------------
-
 // ----------------------------------------------------------------------------
 //  ScriptingEngine: Manages Lua runtime and script execution
 // ----------------------------------------------------------------------------
@@ -466,26 +407,26 @@ struct Scene {
   ScriptingEngine scriptEngine;
   ScriptSystem scriptSystem;
   RenderSystem renderer;
-  std::map<ShapeComponent::Kind, int> kindCounters;
+  std::map<std::string, int> kindCounters;
 
   Scene() : scriptEngine(reg), scriptSystem(reg, scriptEngine), renderer(reg) {}
 
-  Entity createShape(ShapeComponent::Kind k, float x, float y) {
+  Entity createShape(const std::string &kind, float x, float y) {
     Entity e = reg.create();
     reg.emplace<TransformComponent>(e, TransformComponent{x, y});
-    ShapeComponent shapeComp{k, std::monostate{}};
-    if (k == ShapeComponent::Kind::Rectangle) {
-      shapeComp.properties.emplace<RectangleProperties>();
-    } else if (k == ShapeComponent::Kind::Circle) {
-      shapeComp.properties.emplace<CircleProperties>();
-    }
-    reg.emplace<ShapeComponent>(e, shapeComp);
+
+    ShapeComponent shapeComp;
+    shapeComp.shape = ShapeFactory::create(kind);
+    if (!shapeComp.shape)
+      return kInvalidEntity; // Could not create shape
+
+    reg.emplace<ShapeComponent>(e, std::move(shapeComp));
     reg.emplace<MaterialComponent>(e);
     reg.emplace<AnimationComponent>(e);
     reg.emplace<ScriptComponent>(e);
 
-    std::string name = ShapeComponent::toString(k);
-    int count = kindCounters[k]++;
+    std::string name = kind;
+    int count = kindCounters[kind]++;
     if (count > 0) {
       name += "." + std::to_string(count);
     }
@@ -497,10 +438,18 @@ struct Scene {
   Entity createBackground(float width, float height) {
     Entity e = reg.create();
     reg.emplace<TransformComponent>(e, TransformComponent{0, 0, 0, 1.0f, 1.0f});
-    ShapeComponent shapeComp{ShapeComponent::Kind::Rectangle, std::monostate{}};
-    shapeComp.properties.emplace<RectangleProperties>(
-        RectangleProperties{width, height});
-    reg.emplace<ShapeComponent>(e, shapeComp);
+
+    // Create a RectangleShape polymorphically
+    ShapeComponent shapeComp;
+    shapeComp.shape = std::make_unique<RectangleShape>();
+
+    // Deserialize its properties to set width and height
+    QJsonObject props;
+    props["width"] = width;
+    props["height"] = height;
+    shapeComp.shape->deserialize(props);
+
+    reg.emplace<ShapeComponent>(e, std::move(shapeComp));
     reg.emplace<MaterialComponent>(
         e, MaterialComponent{SkColorSetARGB(255, 22, 22, 22), true, false, 1.0f,
                              true});
@@ -578,11 +527,13 @@ struct Scene {
       }
 
       // Serialize ShapeComponent
-      if (auto *shape = reg.get<ShapeComponent>(ent)) {
-        QJsonObject shapeObject;
-        shapeObject["kind"] = (int)shape->kind;
-        shapeObject["properties"] = shape->getProperties().toJsonObject();
-        entityObject["ShapeComponent"] = shapeObject;
+      if (auto *sh = reg.get<ShapeComponent>(ent)) {
+        if (sh->shape) {
+          QJsonObject shapeObject;
+          shapeObject["kind"] = sh->shape->getKindName();
+          shapeObject["properties"] = sh->shape->serialize();
+          entityObject["ShapeComponent"] = shapeObject;
+        }
       }
 
       entitiesArray.append(entityObject);
@@ -674,18 +625,16 @@ REGISTER_COMPONENT(SceneBackgroundComponent,
     break;                                                                     \
   }
 
-REGISTER_COMPONENT(ShapeComponent, [](Scene &scene, Entity ent,
-                                      const QJsonValue &val) {
-  const QJsonObject root = val.toObject();
-  auto kind = static_cast<ShapeComponent::Kind>(root["kind"].toInt());
+REGISTER_COMPONENT(ShapeComponent,
+                   [](Scene &scene, Entity ent, const QJsonValue &val) {
+                     const QJsonObject root = val.toObject();
+                     std::string kind = root["kind"].toString().toStdString();
 
-  ShapeComponent sc{kind, std::monostate{}};
-  if (root.contains("properties")) {
-    const QJsonObject props = root["properties"].toObject();
-    switch (kind) {
-      SHAPE_CASE(Rectangle, RectangleProperties)
-      SHAPE_CASE(Circle, CircleProperties)
-    }
-  }
-  scene.reg.emplace<ShapeComponent>(ent, sc);
-});
+                     ShapeComponent sc;
+                     sc.shape = ShapeFactory::create(kind);
+
+                     if (sc.shape && root.contains("properties")) {
+                       sc.shape->deserialize(root["properties"].toObject());
+                     }
+                     scene.reg.emplace<ShapeComponent>(ent, std::move(sc));
+                   });

@@ -154,22 +154,8 @@ protected:
 
         SkRect originalBounds;
         if (auto *sc = scene_.reg.get<ShapeComponent>(entity)) {
-          switch (sc->kind) {
-          case ShapeComponent::Kind::Rectangle: {
-            const auto &rectProps =
-                std::get<RectangleProperties>(sc->properties);
-            originalBounds =
-                SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
-            break;
-          }
-          case ShapeComponent::Kind::Circle: {
-            const auto &circleProps =
-                std::get<CircleProperties>(sc->properties);
-            originalBounds =
-                SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
-                                 circleProps.radius, circleProps.radius);
-            break;
-          }
+          if (sc->shape) {
+            originalBounds = sc->shape->getBoundingBox();
           }
         }
 
@@ -242,16 +228,10 @@ protected:
       return;
 
     const QByteArray id = e->mimeData()->data("application/x-skia-shape");
-
     const QPointF scenePos = e->posF();
-
     e->acceptProposedAction();
+    scene_.createShape(id.toStdString(), scenePos.x(), scenePos.y());
 
-    ShapeComponent::Kind kind = ShapeComponent::Kind::Rectangle;
-    if (id == "shape/circle")
-      kind = ShapeComponent::Kind::Circle;
-
-    scene_.createShape(kind, scenePos.x(), scenePos.y());
     emit sceneChanged();
     update();
   }
@@ -263,94 +243,72 @@ protected:
     isRotating_ = false;
     initialTransforms_.clear();
 
-    scene_.reg.each<TransformComponent>([&](Entity ent,
-                                            TransformComponent &tr) {
-      if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
-        return;
-      }
+    // --- Hit detection loop ---
+    scene_.reg.each<TransformComponent>(
+        [&](Entity ent, TransformComponent &tr) {
+          if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
+            return;
+          }
 
-      SkRect originalBounds;
-      if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
-        switch (sc->kind) {
-        case ShapeComponent::Kind::Rectangle: {
-          const auto &rectProps = std::get<RectangleProperties>(sc->properties);
-          originalBounds =
-              SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
-          break;
-        }
-        case ShapeComponent::Kind::Circle: {
-          const auto &circleProps = std::get<CircleProperties>(sc->properties);
-          originalBounds =
-              SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
-                               circleProps.radius, circleProps.radius);
-          break;
-        }
-        }
-      }
+          if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
+            if (!sc->shape)
+              return; // Skip if shape is not valid
 
-      SkMatrix matrix;
-      matrix.setTranslate(tr.x, tr.y);
-      matrix.preRotate(tr.rotation * 180 / M_PI);
-      matrix.preScale(tr.sx, tr.sy);
+            SkRect originalBounds = sc->shape->getBoundingBox();
 
-      SkPoint transformedCorners[4];
-      originalBounds.toQuad(transformedCorners);
-      matrix.mapPoints(transformedCorners, transformedCorners);
+            SkMatrix matrix;
+            matrix.setTranslate(tr.x, tr.y);
+            matrix.preRotate(tr.rotation * 180 / M_PI);
+            matrix.preScale(tr.sx, tr.sy);
 
-      if (isPointInPolygon(SkPoint::Make(e->x(), e->y()), transformedCorners,
-                           4)) {
-        clickedEntity = ent;
-      }
-    });
+            SkPoint transformedCorners[4];
+            originalBounds.toQuad(transformedCorners);
+            matrix.mapPoints(transformedCorners, transformedCorners);
 
+            if (isPointInPolygon(SkPoint::Make(e->x(), e->y()),
+                                 transformedCorners, 4)) {
+              clickedEntity = ent;
+            }
+          }
+        });
+
+    // --- Rotation handle check ---
     if (selectedEntities_.count() == 1) {
       Entity selectedEntity = selectedEntities_.first();
       if (auto *tc = scene_.reg.get<TransformComponent>(selectedEntity)) {
-        SkRect originalBounds;
         if (auto *sc = scene_.reg.get<ShapeComponent>(selectedEntity)) {
-          switch (sc->kind) {
-          case ShapeComponent::Kind::Rectangle: {
-            const auto &rectProps =
-                std::get<RectangleProperties>(sc->properties);
-            originalBounds =
-                SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
-            break;
-          }
-          case ShapeComponent::Kind::Circle: {
-            const auto &circleProps =
-                std::get<CircleProperties>(sc->properties);
-            originalBounds =
-                SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
-                                 circleProps.radius, circleProps.radius);
-            break;
-          }
-          }
-        }
+          if (sc->shape) {
+            // POLYMORPHIC CALL: Get bounds for rotation handle calculation
+            SkRect originalBounds = sc->shape->getBoundingBox();
 
-        SkMatrix matrix;
-        matrix.setTranslate(tc->x, tc->y);
-        matrix.preRotate(tc->rotation * 180 / M_PI);
-        matrix.preScale(tc->sx, tc->sy);
+            SkMatrix matrix;
+            matrix.setTranslate(tc->x, tc->y);
+            matrix.preRotate(tc->rotation * 180 / M_PI);
+            matrix.preScale(tc->sx, tc->sy);
 
-        SkPoint rotationHandleCenter =
-            SkPoint::Make(originalBounds.centerX(), originalBounds.top() - 10);
-        SkSpan<SkPoint> rotationHandleCenterSpan(&rotationHandleCenter, 1);
-        matrix.mapPoints(rotationHandleCenterSpan);
+            SkPoint rotationHandleCenter = SkPoint::Make(
+                originalBounds.centerX(), originalBounds.top() - 10);
+            SkSpan<SkPoint> rotationHandleCenterSpan(&rotationHandleCenter, 1);
+            matrix.mapPoints(rotationHandleCenterSpan);
 
-        SkRect handleBounds = SkRect::MakeLTRB(
-            rotationHandleCenter.x() - 8, rotationHandleCenter.y() - 8,
-            rotationHandleCenter.x() + 8, rotationHandleCenter.y() + 8);
-        if (handleBounds.contains(e->x(), e->y())) {
-          isRotating_ = true;
-          dragStart_ = e->pos();
-          initialTransforms_[selectedEntity] = {tc->x, tc->y, tc->rotation,
-                                                tc->sx, tc->sy};
-          update();
-          return; // Don't process other selection logic
+            SkRect handleBounds = SkRect::MakeLTRB(
+                rotationHandleCenter.x() - 8, rotationHandleCenter.y() - 8,
+                rotationHandleCenter.x() + 8, rotationHandleCenter.y() + 8);
+
+            if (handleBounds.contains(e->x(), e->y())) {
+              isRotating_ = true;
+              dragStart_ = e->pos();
+              initialTransforms_[selectedEntity] = {tc->x, tc->y, tc->rotation,
+                                                    tc->sx, tc->sy};
+              update();
+              return; // Don't process other selection logic
+            }
+          }
         }
       }
     }
 
+    // --- Selection logic ---
     if (clickedEntity != kInvalidEntity) { // An entity was clicked
       if (shiftPressed) {
         if (selectedEntities_.contains(clickedEntity)) {
@@ -384,7 +342,6 @@ protected:
     emit canvasSelectionChanged(selectedEntities_);
     update();
   }
-
   void mouseMoveEvent(QMouseEvent *e) override {
     if (isRotating_ && selectedEntities_.count() == 1) {
       Entity entity = selectedEntities_.first();
@@ -443,48 +400,34 @@ protected:
         selectedEntities_.clear();
       }
 
-      scene_.reg.each<TransformComponent>(
-          [&](Entity ent, TransformComponent &tr) {
-            if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
-              return;
-            }
-            SkRect originalBounds;
-            if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
-              switch (sc->kind) {
-              case ShapeComponent::Kind::Rectangle: {
-                const auto &rectProps =
-                    std::get<RectangleProperties>(sc->properties);
-                originalBounds =
-                    SkRect::MakeXYWH(0, 0, rectProps.width, rectProps.height);
-                break;
-              }
-              case ShapeComponent::Kind::Circle: {
-                const auto &circleProps =
-                    std::get<CircleProperties>(sc->properties);
-                originalBounds =
-                    SkRect::MakeLTRB(-circleProps.radius, -circleProps.radius,
-                                     circleProps.radius, circleProps.radius);
-                break;
-              }
-              }
-            }
+      scene_.reg.each<TransformComponent>([&](Entity ent,
+                                              TransformComponent &tr) {
+        if (scene_.reg.has<SceneBackgroundComponent>(ent)) {
+          return;
+        }
 
-            SkMatrix matrix;
-            matrix.setTranslate(tr.x, tr.y);
-            matrix.preRotate(tr.rotation * 180 / M_PI);
-            matrix.preScale(tr.sx, tr.sy);
+        if (auto *sc = scene_.reg.get<ShapeComponent>(ent)) {
+          if (!sc->shape)
+            return; // Skip if shape is not valid
 
-            SkRect entityAABB;
-            matrix.mapRect(&entityAABB, originalBounds);
+          SkRect originalBounds = sc->shape->getBoundingBox();
+          SkMatrix matrix;
+          matrix.setTranslate(tr.x, tr.y);
+          matrix.preRotate(tr.rotation * 180 / M_PI);
+          matrix.preScale(tr.sx, tr.sy);
 
-            if (selectionRect.intersects(QRectF(entityAABB.x(), entityAABB.y(),
-                                                entityAABB.width(),
-                                                entityAABB.height()))) {
-              if (!selectedEntities_.contains(ent)) {
-                selectedEntities_.append(ent);
-              }
+          SkRect entityAABB;
+          matrix.mapRect(&entityAABB, originalBounds);
+
+          if (selectionRect.intersects(QRectF(entityAABB.x(), entityAABB.y(),
+                                              entityAABB.width(),
+                                              entityAABB.height()))) {
+            if (!selectedEntities_.contains(ent)) {
+              selectedEntities_.append(ent);
             }
-          });
+          }
+        }
+      });
       emit canvasSelectionChanged(selectedEntities_);
     }
 
@@ -507,7 +450,6 @@ protected:
     isRotating_ = false;
     update();
   }
-
 signals:
   void sceneChanged();
   void transformChanged(Entity entity);
