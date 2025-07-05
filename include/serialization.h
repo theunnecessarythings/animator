@@ -1,78 +1,70 @@
 #pragma once
+//
+//  serializeEntity()  →  QJsonObject
+//  Converts a single entity into the clipboard-friendly JSON format used
+//  by copy/paste.
+//
 #include "ecs.h"
 #include <QJsonArray>
 #include <QJsonObject>
 
-/**
- *  Serialise one entity into a QJsonObject that matches the clipboard format
- *  used by onCopy()/onPaste().
- *
- *  Usage:
- *      QJsonArray arr;
- *      for (Entity e : selected)
- *          arr.append(serializeEntity(scene, e));
- *      QApplication::clipboard()->setText(QJsonDocument(arr)
- *                                         .toJson(QJsonDocument::Compact));
- */
 inline QJsonObject serializeEntity(const Scene &scene, Entity e) {
-  QJsonObject entityObj;
+  QJsonObject o;
 
-  // ---------- NameComponent ------------------------------------------------
-  if (auto *name = scene.reg.get<NameComponent>(e))
-    entityObj["NameComponent"] = QString::fromStdString(name->name);
+  // NameComponent ---------------------------------------------------------
+  if (auto *n = scene.reg.get<NameComponent>(e))
+    o["NameComponent"] = QString::fromStdString(n->name);
 
-  // ---------- TransformComponent ------------------------------------------
-  if (auto *tr = scene.reg.get<TransformComponent>(e)) {
-    QJsonObject t;
-    t["x"] = tr->x;
-    t["y"] = tr->y;
-    t["rotation"] = tr->rotation;
-    t["sx"] = tr->sx;
-    t["sy"] = tr->sy;
-    entityObj["TransformComponent"] = t;
+  // TransformComponent ----------------------------------------------------
+  if (auto *t = scene.reg.get<TransformComponent>(e)) {
+    QJsonObject j;
+    j["x"] = t->x;
+    j["y"] = t->y;
+    j["rotation"] = t->rotation;
+    j["sx"] = t->sx;
+    j["sy"] = t->sy;
+    o["TransformComponent"] = j;
   }
 
-  // ---------- MaterialComponent -------------------------------------------
+  // MaterialComponent -----------------------------------------------------
   if (auto *m = scene.reg.get<MaterialComponent>(e)) {
-    QJsonObject mat;
-    mat["color"] = static_cast<qint64>(m->color);
-    mat["isFilled"] = m->isFilled;
-    mat["isStroked"] = m->isStroked;
-    mat["strokeWidth"] = m->strokeWidth;
-    mat["antiAliased"] = m->antiAliased;
-    entityObj["MaterialComponent"] = mat;
+    QJsonObject j;
+    j["color"] = static_cast<qint64>(m->color);
+    j["isFilled"] = m->isFilled;
+    j["isStroked"] = m->isStroked;
+    j["strokeWidth"] = m->strokeWidth;
+    j["antiAliased"] = m->antiAliased;
+    o["MaterialComponent"] = j;
   }
 
-  // ---------- AnimationComponent ------------------------------------------
+  // AnimationComponent ----------------------------------------------------
   if (auto *a = scene.reg.get<AnimationComponent>(e)) {
-    QJsonObject anim;
-    anim["entryTime"] = a->entryTime;
-    anim["exitTime"] = a->exitTime;
-    entityObj["AnimationComponent"] = anim;
+    QJsonObject j;
+    j["entryTime"] = a->entryTime;
+    j["exitTime"] = a->exitTime;
+    o["AnimationComponent"] = j;
   }
 
-  // ---------- ScriptComponent ---------------------------------------------
+  // ScriptComponent -------------------------------------------------------
   if (auto *s = scene.reg.get<ScriptComponent>(e)) {
-    QJsonObject scr;
-    scr["scriptPath"] = QString::fromStdString(s->scriptPath);
-    scr["startFunction"] = QString::fromStdString(s->startFunction);
-    scr["updateFunction"] = QString::fromStdString(s->updateFunction);
-    scr["destroyFunction"] = QString::fromStdString(s->destroyFunction);
-    entityObj["ScriptComponent"] = scr;
+    QJsonObject j;
+    j["scriptPath"] = QString::fromStdString(s->scriptPath);
+    j["startFunction"] = QString::fromStdString(s->startFunction);
+    j["updateFunction"] = QString::fromStdString(s->updateFunction);
+    j["destroyFunction"] = QString::fromStdString(s->destroyFunction);
+    o["ScriptComponent"] = j;
   }
 
-  // ---------- SceneBackgroundComponent (tag) ------------------------------
+  // SceneBackgroundComponent (tag) ---------------------------------------
   if (scene.reg.has<SceneBackgroundComponent>(e))
-    entityObj["SceneBackgroundComponent"] = true;
+    o["SceneBackgroundComponent"] = true;
 
-  // ---------- ShapeComponent ----------------------------------------------
-  if (auto *sh = scene.reg.get<ShapeComponent>(e)) {
-    if (sh->shape) {
-      QJsonObject shapeObject;
-      shapeObject["kind"] = sh->shape->getKindName();
-      shapeObject["properties"] = sh->shape->serialize();
-      entityObj["ShapeComponent"] = shapeObject;
-    }
+  // ShapeComponent --------------------------------------------------------
+  if (auto *sh = scene.reg.get<ShapeComponent>(e); sh && sh->shape) {
+    QJsonObject j;
+    j["kind"] = sh->shape->getKindName();
+    j["properties"] = sh->shape->serialize();
+    o["ShapeComponent"] = j;
   }
-  return entityObj;
+  return o;
 }

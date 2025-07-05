@@ -7,52 +7,40 @@ public:
   explicit RenderSystem(Registry &r) : reg_(r) {}
 
   void render(SkCanvas *canvas, float currentTime) {
-    std::vector<Entity> backgroundEntities;
-    std::vector<Entity> foregroundEntities;
+    std::vector<Entity> bg, fg;
 
-    reg_.each<TransformComponent>([&](Entity ent, TransformComponent &) {
-      if (reg_.has<SceneBackgroundComponent>(ent)) {
-        backgroundEntities.push_back(ent);
-      } else {
-        foregroundEntities.push_back(ent);
-      }
+    reg_.each<TransformComponent>([&](Entity e, TransformComponent &) {
+      (reg_.has<SceneBackgroundComponent>(e) ? bg : fg).push_back(e);
     });
 
-    for (Entity ent : backgroundEntities) {
-      if (auto *tr = reg_.get<TransformComponent>(ent)) {
-        renderEntity(canvas, currentTime, ent, *tr);
-      }
-    }
+    auto drawList = [&](const std::vector<Entity> &list) {
+      for (Entity e : list)
+        if (auto *tr = reg_.get<TransformComponent>(e))
+          renderEntity(canvas, currentTime, e, *tr);
+    };
 
-    for (Entity ent : foregroundEntities) {
-      if (auto *tr = reg_.get<TransformComponent>(ent)) {
-        renderEntity(canvas, currentTime, ent, *tr);
-      }
-    }
+    drawList(bg);
+    drawList(fg);
   }
 
 private:
-  void renderEntity(SkCanvas *canvas, float currentTime, Entity ent,
-                    TransformComponent &tr) {
-    auto *shapeComp = reg_.get<ShapeComponent>(ent);
-    auto *material = reg_.get<MaterialComponent>(ent);
-
-    if (!shapeComp || !shapeComp->shape || !material)
+  void renderEntity(SkCanvas *c, float time, Entity e, TransformComponent &tr) {
+    auto *shape = reg_.get<ShapeComponent>(e);
+    auto *material = reg_.get<MaterialComponent>(e);
+    if (!shape || !shape->shape || !material)
       return;
 
-    auto *animation = reg_.get<AnimationComponent>(ent);
-    if (animation && (currentTime < animation->entryTime ||
-                      currentTime > animation->exitTime)) {
-      return; // Don't render if outside entry/exit times
-    }
-    canvas->save();
-    canvas->translate(tr.x, tr.y);
-    canvas->rotate(tr.rotation * 180 / M_PI);
-    canvas->scale(tr.sx, tr.sy);
+    if (auto *anim = reg_.get<AnimationComponent>(e))
+      if (time < anim->entryTime || time > anim->exitTime)
+        return;
 
-    shapeComp->shape->render(canvas, *material);
+    c->save();
+    c->translate(tr.x, tr.y);
+    c->rotate(tr.rotation * 180.f / M_PI);
+    c->scale(tr.sx, tr.sy);
 
-    canvas->restore();
+    shape->shape->render(c, *material);
+    c->restore();
   }
 
   Registry &reg_;

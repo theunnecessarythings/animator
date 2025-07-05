@@ -1,37 +1,41 @@
 #include "commands.h"
-#include "ecs.h"
 #include "serialization.h"
 #include "window.h"
 
-inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
+//
+//  Utility helpers
+// ──────────────────────────────────────────────────────────────────────────────
+static inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
   return serializeEntity(scene, e);
 }
 
-// restore into *exactly the same handle* if possible
-inline void restoreInto(Scene &scene, Entity e, const QJsonObject &json) {
-  scene.reg.destroy(e);
-  ComponentRegistry::instance().apply(scene, e, json);
-}
-
-// create a *fresh* entity
-inline Entity createFrom(Scene &scene, const QJsonObject &json) {
+static inline Entity createFrom(Scene &scene, const QJsonObject &json) {
   Entity e = scene.reg.create();
   ComponentRegistry::instance().apply(scene, e, json);
   return e;
 }
 
-/* recreates the entity, returns its (new) id */
-Entity restoreEntity(Scene &scene, const QJsonObject &json) {
-  Entity e = scene.reg.create();
-  ComponentRegistry::instance().apply(scene, e, json);
-  return e;
+static inline void destroyList(Scene &scene, const QList<Entity> &list) {
+  for (Entity e : list)
+    scene.reg.destroy(e);
 }
 
+static inline QList<Entity> recreateList(Scene &scene,
+                                         const QList<QJsonObject> &jsons) {
+  QList<Entity> out;
+  out.reserve(jsons.size());
+  for (const auto &j : jsons)
+    out.append(createFrom(scene, j));
+  return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  AddEntityCommand
+// ──────────────────────────────────────────────────────────────────────────────
 AddEntityCommand::AddEntityCommand(MainWindow *w, Entity e, QUndoCommand *p)
     : QUndoCommand(p), m_mainWindow(w), m_entity(e),
       m_entityData(snapshotEntity(w->canvas()->scene(), e)) {
   setText(QObject::tr("Add Entity"));
-  m_firstRedo = true;
 }
 
 void AddEntityCommand::undo() {
@@ -41,16 +45,20 @@ void AddEntityCommand::undo() {
 }
 
 void AddEntityCommand::redo() {
-  if (m_firstRedo) { // nothing to do – entity already there
-    m_firstRedo = false;
+  static bool first = true;
+  if (first) {
+    first = false;
     return;
-  }
-  auto &scene = m_mainWindow->canvas()->scene();
-  m_entity = createFrom(scene, m_entityData);
+  } // initial create already done
+
+  m_entity = createFrom(m_mainWindow->canvas()->scene(), m_entityData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+//  RemoveEntityCommand
+// ──────────────────────────────────────────────────────────────────────────────
 RemoveEntityCommand::RemoveEntityCommand(MainWindow *w, Entity e,
                                          QUndoCommand *p)
     : QUndoCommand(p), m_mainWindow(w), m_entity(e),
@@ -65,30 +73,19 @@ void RemoveEntityCommand::redo() {
 }
 
 void RemoveEntityCommand::undo() {
-  auto &scene = m_mainWindow->canvas()->scene();
-  restoreInto(scene, m_entity, m_entityData);
-
+  // Re-create and update stored id (Flecs may allocate a new one)
+  m_entity = createFrom(m_mainWindow->canvas()->scene(), m_entityData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
-void destroyList(Scene &scene, const QList<Entity> &list) {
-  for (Entity e : list)
-    scene.reg.destroy(e);
-}
-
-QList<Entity> recreateList(Scene &scene, const QList<QJsonObject> &jsons) {
-  QList<Entity> out;
-  out.reserve(jsons.size());
-  for (const auto &j : jsons)
-    out.append(createFrom(scene, j));
-  return out;
-}
-
+// ──────────────────────────────────────────────────────────────────────────────
+//  Cut / Delete multi-selection
+// ──────────────────────────────────────────────────────────────────────────────
 CutCommand::CutCommand(MainWindow *w, const QList<Entity> &sel, QUndoCommand *p)
     : QUndoCommand(p), m_mainWindow(w), m_entities(sel) {
   setText(QObject::tr("Cut Entities"));
-  auto &scene = w->canvas()->scene();
+  Scene &scene = w->canvas()->scene();
   for (Entity e : sel)
     m_entitiesData.append(snapshotEntity(scene, e));
 }
@@ -106,291 +103,278 @@ void CutCommand::undo() {
   m_mainWindow->canvas()->update();
 }
 
-// MoveEntityCommand
-MoveEntityCommand::MoveEntityCommand(MainWindow *mainWindow, Entity entity,
-                                     float oldX, float oldY, float oldRotation,
-                                     float newX, float newY, float newRotation,
-                                     QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(mainWindow), m_entity(entity),
-      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation), m_newX(newX),
-      m_newY(newY), m_newRotation(newRotation) {
-  setText(QObject::tr("Move Entity"));
-}
-
-void MoveEntityCommand::undo() {
-  if (auto *transform =
-          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
-              m_entity)) {
-    transform->x = m_oldX;
-    transform->y = m_oldY;
-    transform->rotation = m_oldRotation;
-    m_mainWindow->canvas()->update();
-  }
-}
-
-void MoveEntityCommand::redo() {
-  if (auto *transform =
-          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
-              m_entity)) {
-    transform->x = m_newX;
-    transform->y = m_newY;
-    transform->rotation = m_newRotation;
-    m_mainWindow->canvas()->update();
-  }
-}
-
+// -----------------------------------------------------------------------------
 // DeleteCommand
-DeleteCommand::DeleteCommand(MainWindow *win, const QList<Entity> &ents,
+// -----------------------------------------------------------------------------
+DeleteCommand::DeleteCommand(MainWindow *w, const QList<Entity> &ents,
                              QUndoCommand *p)
-    : QUndoCommand(p), m_mainWindow(win), m_entities(ents) {
+    : QUndoCommand(p), m_mainWindow(w), m_entities(ents) {
   setText(QObject::tr("Delete Entities"));
-  auto &scene = win->canvas()->scene();
-  for (Entity e : m_entities)
+  Scene &scene = w->canvas()->scene();
+  for (Entity e : ents)
     m_entitiesData.append(snapshotEntity(scene, e));
 }
 
 void DeleteCommand::redo() {
-  auto &scene = m_mainWindow->canvas()->scene();
-  destroyList(scene, m_entities);
+  destroyList(m_mainWindow->canvas()->scene(), m_entities);
   m_entities.clear();
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
 void DeleteCommand::undo() {
-  auto &scene = m_mainWindow->canvas()->scene();
-  m_entities = recreateList(scene, m_entitiesData);
+  m_entities = recreateList(m_mainWindow->canvas()->scene(), m_entitiesData);
   m_mainWindow->sceneModel()->refresh();
   m_mainWindow->canvas()->update();
 }
 
-// ChangeNameCommand
-ChangeNameCommand::ChangeNameCommand(MainWindow *window, Entity entity,
-                                     const std::string &oldName,
-                                     const std::string &newName,
-                                     QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldName(oldName), m_newName(newName) {
+// ──────────────────────────────────────────────────────────────────────────────
+//  MoveEntityCommand
+// ──────────────────────────────────────────────────────────────────────────────
+MoveEntityCommand::MoveEntityCommand(MainWindow *w, Entity e, float oldX,
+                                     float oldY, float oldR, float newX,
+                                     float newY, float newR, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldX(oldX), m_oldY(oldY),
+      m_oldRot(oldR), m_newX(newX), m_newY(newY), m_newRot(newR) {
+  setText(QObject::tr("Move Entity"));
+}
+
+void MoveEntityCommand::undo() {
+  if (auto *t = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+          m_entity)) {
+    t->x = m_oldX;
+    t->y = m_oldY;
+    t->rotation = m_oldRot;
+    m_mainWindow->canvas()->update();
+  }
+}
+
+void MoveEntityCommand::redo() {
+  if (auto *t = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+          m_entity)) {
+    t->x = m_newX;
+    t->y = m_newY;
+    t->rotation = m_newRot;
+    m_mainWindow->canvas()->update();
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeNameCommand
+// ──────────────────────────────────────────────────────────────────────────────
+ChangeNameCommand::ChangeNameCommand(MainWindow *w, Entity e,
+                                     const std::string &oldN,
+                                     const std::string &newN, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldName(oldN),
+      m_newName(newN) {
   setText(QObject::tr("Change Entity Name"));
 }
 
 void ChangeNameCommand::undo() {
-  if (auto *name =
+  if (auto *n =
           m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
-    name->name = m_oldName;
+    n->name = m_oldName;
     m_mainWindow->sceneModel()->refresh();
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeNameCommand::redo() {
-  if (auto *name =
+  if (auto *n =
           m_mainWindow->canvas()->scene().reg.get<NameComponent>(m_entity)) {
-    name->name = m_newName;
+    n->name = m_newName;
     m_mainWindow->sceneModel()->refresh();
     m_mainWindow->canvas()->update();
   }
 }
 
-// ChangeTransformCommand
-ChangeTransformCommand::ChangeTransformCommand(
-    MainWindow *window, Entity entity, float oldX, float oldY,
-    float oldRotation, float oldSx, float oldSy, float newX, float newY,
-    float newRotation, float newSx, float newSy, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldX(oldX), m_oldY(oldY), m_oldRotation(oldRotation), m_oldSx(oldSx),
-      m_oldSy(oldSy), m_newX(newX), m_newY(newY), m_newRotation(newRotation),
-      m_newSx(newSx), m_newSy(newSy) {
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeTransformCommand  (with merge)
+// ──────────────────────────────────────────────────────────────────────────────
+ChangeTransformCommand::ChangeTransformCommand(MainWindow *w, Entity e,
+                                               float oX, float oY, float oR,
+                                               float oSx, float oSy, float nX,
+                                               float nY, float nR, float nSx,
+                                               float nSy, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldX(oX), m_oldY(oY),
+      m_oldRot(oR), m_oldSx(oSx), m_oldSy(oSy), m_newX(nX), m_newY(nY),
+      m_newRot(nR), m_newSx(nSx), m_newSy(nSy) {
   setText(QObject::tr("Change Entity Transform"));
 }
 
 void ChangeTransformCommand::undo() {
-  if (auto *transform =
-          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
-              m_entity)) {
-    transform->x = m_oldX;
-    transform->y = m_oldY;
-    transform->rotation = m_oldRotation;
-    transform->sx = m_oldSx;
-    transform->sy = m_oldSy;
+  if (auto *t = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+          m_entity)) {
+    t->x = m_oldX;
+    t->y = m_oldY;
+    t->rotation = m_oldRot;
+    t->sx = m_oldSx;
+    t->sy = m_oldSy;
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeTransformCommand::redo() {
-  if (auto *transform =
-          m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
-              m_entity)) {
-    transform->x = m_newX;
-    transform->y = m_newY;
-    transform->rotation = m_newRotation;
-    transform->sx = m_newSx;
-    transform->sy = m_newSy;
+  if (auto *t = m_mainWindow->canvas()->scene().reg.get<TransformComponent>(
+          m_entity)) {
+    t->x = m_newX;
+    t->y = m_newY;
+    t->rotation = m_newRot;
+    t->sx = m_newSx;
+    t->sy = m_newSy;
     m_mainWindow->canvas()->update();
   }
 }
 
 bool ChangeTransformCommand::mergeWith(const QUndoCommand *other) {
-  // Ensure the other command is the same type
-  if (other->id() != Id) {
+  if (other->id() != Id)
     return false;
-  }
-
-  // Cast it to our specific type
-  const auto *otherCmd = static_cast<const ChangeTransformCommand *>(other);
-
-  // Ensure it's for the same entity
-  if (m_entity != otherCmd->m_entity) {
+  const auto *o = static_cast<const ChangeTransformCommand *>(other);
+  if (m_entity != o->m_entity)
     return false;
-  }
 
-  // It's a match! Absorb the "new" state from the other command.
-  // Our own "old" state is preserved, representing the true beginning of the
-  // action.
-  m_newX = otherCmd->m_newX;
-  m_newY = otherCmd->m_newY;
-  m_newRotation = otherCmd->m_newRotation;
-  m_newSx = otherCmd->m_newSx;
-  m_newSy = otherCmd->m_newSy;
-
-  // Return true to tell the undo stack the merge was successful.
+  m_newX = o->m_newX;
+  m_newY = o->m_newY;
+  m_newRot = o->m_newRot;
+  m_newSx = o->m_newSx;
+  m_newSy = o->m_newSy;
   return true;
 }
-// ChangeMaterialCommand
-ChangeMaterialCommand::ChangeMaterialCommand(
-    MainWindow *window, Entity entity, SkColor oldColor, bool oldIsFilled,
-    bool oldIsStroked, float oldStrokeWidth, bool oldAntiAliased,
-    SkColor newColor, bool newIsFilled, bool newIsStroked, float newStrokeWidth,
-    bool newAntiAliased, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldColor(oldColor), m_oldIsFilled(oldIsFilled),
-      m_oldIsStroked(oldIsStroked), m_oldStrokeWidth(oldStrokeWidth),
-      m_oldAntiAliased(oldAntiAliased), m_newColor(newColor),
-      m_newIsFilled(newIsFilled), m_newIsStroked(newIsStroked),
-      m_newStrokeWidth(newStrokeWidth), m_newAntiAliased(newAntiAliased) {
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeMaterialCommand
+// ──────────────────────────────────────────────────────────────────────────────
+ChangeMaterialCommand::ChangeMaterialCommand(MainWindow *w, Entity e,
+                                             SkColor oCol, bool oFill,
+                                             bool oStroke, float oSw, bool oAA,
+                                             SkColor nCol, bool nFill,
+                                             bool nStroke, float nSw, bool nAA,
+                                             QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldColor(oCol),
+      m_oldIsFilled(oFill), m_oldIsStroked(oStroke), m_oldStrokeWidth(oSw),
+      m_oldAA(oAA), m_newColor(nCol), m_newIsFilled(nFill),
+      m_newIsStroked(nStroke), m_newStrokeWidth(nSw), m_newAA(nAA) {
   setText(QObject::tr("Change Entity Material"));
 }
 
 void ChangeMaterialCommand::undo() {
-  if (auto *material =
-          m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
-              m_entity)) {
-    material->color = m_oldColor;
-    material->isFilled = m_oldIsFilled;
-    material->isStroked = m_oldIsStroked;
-    material->strokeWidth = m_oldStrokeWidth;
-    material->antiAliased = m_oldAntiAliased;
+  if (auto *m = m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
+          m_entity)) {
+    m->color = m_oldColor;
+    m->isFilled = m_oldIsFilled;
+    m->isStroked = m_oldIsStroked;
+    m->strokeWidth = m_oldStrokeWidth;
+    m->antiAliased = m_oldAA;
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeMaterialCommand::redo() {
-  if (auto *material =
-          m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
-              m_entity)) {
-    material->color = m_newColor;
-    material->isFilled = m_newIsFilled;
-    material->isStroked = m_newIsStroked;
-    material->strokeWidth = m_newStrokeWidth;
-    material->antiAliased = m_newAntiAliased;
+  if (auto *m = m_mainWindow->canvas()->scene().reg.get<MaterialComponent>(
+          m_entity)) {
+    m->color = m_newColor;
+    m->isFilled = m_newIsFilled;
+    m->isStroked = m_newIsStroked;
+    m->strokeWidth = m_newStrokeWidth;
+    m->antiAliased = m_newAA;
     m_mainWindow->canvas()->update();
   }
 }
 
-// ChangeAnimationCommand
-ChangeAnimationCommand::ChangeAnimationCommand(
-    MainWindow *window, Entity entity, float oldEntryTime, float oldExitTime,
-    float newEntryTime, float newExitTime, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldEntryTime(oldEntryTime), m_oldExitTime(oldExitTime),
-      m_newEntryTime(newEntryTime), m_newExitTime(newExitTime) {
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeAnimationCommand
+// ──────────────────────────────────────────────────────────────────────────────
+ChangeAnimationCommand::ChangeAnimationCommand(MainWindow *w, Entity e,
+                                               float oEntry, float oExit,
+                                               float nEntry, float nExit,
+                                               QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldEntry(oEntry),
+      m_oldExit(oExit), m_newEntry(nEntry), m_newExit(nExit) {
   setText(QObject::tr("Change Entity Animation"));
 }
 
 void ChangeAnimationCommand::undo() {
-  if (auto *animation =
-          m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
-              m_entity)) {
-    animation->entryTime = m_oldEntryTime;
-    animation->exitTime = m_oldExitTime;
+  if (auto *a = m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
+          m_entity)) {
+    a->entryTime = m_oldEntry;
+    a->exitTime = m_oldExit;
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeAnimationCommand::redo() {
-  if (auto *animation =
-          m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
-              m_entity)) {
-    animation->entryTime = m_newEntryTime;
-    animation->exitTime = m_newExitTime;
+  if (auto *a = m_mainWindow->canvas()->scene().reg.get<AnimationComponent>(
+          m_entity)) {
+    a->entryTime = m_newEntry;
+    a->exitTime = m_newExit;
     m_mainWindow->canvas()->update();
   }
 }
 
-// ChangeScriptCommand
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeScriptCommand
+// ──────────────────────────────────────────────────────────────────────────────
 ChangeScriptCommand::ChangeScriptCommand(
-    MainWindow *window, Entity entity, const std::string &oldScriptPath,
-    const std::string &oldStartFunction, const std::string &oldUpdateFunction,
-    const std::string &oldDestroyFunction, const std::string &newScriptPath,
-    const std::string &newStartFunction, const std::string &newUpdateFunction,
-    const std::string &newDestroyFunction, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldScriptPath(oldScriptPath), m_oldStartFunction(oldStartFunction),
-      m_oldUpdateFunction(oldUpdateFunction),
-      m_oldDestroyFunction(oldDestroyFunction), m_newScriptPath(newScriptPath),
-      m_newStartFunction(newStartFunction),
-      m_newUpdateFunction(newUpdateFunction),
-      m_newDestroyFunction(newDestroyFunction) {
+    MainWindow *w, Entity e, const std::string &oPath,
+    const std::string &oStart, const std::string &oUpdate,
+    const std::string &oDestroy, const std::string &nPath,
+    const std::string &nStart, const std::string &nUpdate,
+    const std::string &nDestroy, QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldPath(oPath),
+      m_oldStart(oStart), m_oldUpdate(oUpdate), m_oldDestroy(oDestroy),
+      m_newPath(nPath), m_newStart(nStart), m_newUpdate(nUpdate),
+      m_newDestroy(nDestroy) {
   setText(QObject::tr("Change Entity Script"));
 }
 
 void ChangeScriptCommand::undo() {
-  if (auto *script =
+  if (auto *s =
           m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
-    script->scriptPath = m_oldScriptPath;
-    script->startFunction = m_oldStartFunction;
-    script->updateFunction = m_oldUpdateFunction;
-    script->destroyFunction = m_oldDestroyFunction;
+    s->scriptPath = m_oldPath;
+    s->startFunction = m_oldStart;
+    s->updateFunction = m_oldUpdate;
+    s->destroyFunction = m_oldDestroy;
     m_mainWindow->canvas()->update();
   }
 }
 
 void ChangeScriptCommand::redo() {
-  if (auto *script =
+  if (auto *s =
           m_mainWindow->canvas()->scene().reg.get<ScriptComponent>(m_entity)) {
-    script->scriptPath = m_newScriptPath;
-    script->startFunction = m_newStartFunction;
-    script->updateFunction = m_newUpdateFunction;
-    script->destroyFunction = m_newDestroyFunction;
+    s->scriptPath = m_newPath;
+    s->startFunction = m_newStart;
+    s->updateFunction = m_newUpdate;
+    s->destroyFunction = m_newDestroy;
     m_mainWindow->canvas()->update();
   }
 }
 
-// ChangeShapePropertyCommand
-ChangeShapePropertyCommand::ChangeShapePropertyCommand(
-    MainWindow *window, Entity entity, const QJsonObject &oldProperties,
-    const QJsonObject &newProperties, QUndoCommand *parent)
-    : QUndoCommand(parent), m_mainWindow(window), m_entity(entity),
-      m_oldProperties(oldProperties), m_newProperties(newProperties) {
+// ──────────────────────────────────────────────────────────────────────────────
+//  ChangeShapePropertyCommand
+// ──────────────────────────────────────────────────────────────────────────────
+ChangeShapePropertyCommand::ChangeShapePropertyCommand(MainWindow *w, Entity e,
+                                                       const QJsonObject &oldP,
+                                                       const QJsonObject &newP,
+                                                       QUndoCommand *p)
+    : QUndoCommand(p), m_mainWindow(w), m_entity(e), m_oldProps(oldP),
+      m_newProps(newP) {
   setText(QObject::tr("Change Shape Property"));
 }
 
 void ChangeShapePropertyCommand::undo() {
-  if (auto *shapeComp =
-          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
-    if (shapeComp->shape) {
-      shapeComp->shape->deserialize(m_oldProperties);
+  if (auto *sc =
+          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity))
+    if (sc->shape) {
+      sc->shape->deserialize(m_oldProps);
       m_mainWindow->canvas()->update();
     }
-  }
 }
 
 void ChangeShapePropertyCommand::redo() {
-  if (auto *shapeComp =
-          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity)) {
-    if (shapeComp->shape) {
-      shapeComp->shape->deserialize(m_newProperties);
+  if (auto *sc =
+          m_mainWindow->canvas()->scene().reg.get<ShapeComponent>(m_entity))
+    if (sc->shape) {
+      sc->shape->deserialize(m_newProps);
       m_mainWindow->canvas()->update();
     }
-  }
 }

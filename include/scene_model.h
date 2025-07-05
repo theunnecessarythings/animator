@@ -1,10 +1,9 @@
 #pragma once
-// SceneModel – a flat QAbstractItemModel that exposes all ECS entities
-// so the Scene dock (QTreeView) can list them.  One row per entity.
 //
-//   • Uses the Registry inside your Scene (ecs.h).
-//   • Call refresh() whenever entities change (e.g. after a drop).
-//   • Minimal now: shows "Entity <id>"; later add NameComponent, icons, etc.
+// SceneModel – a flat QAbstractItemModel exposing every entity in the Scene.
+// One row per entity.  Call refresh() whenever the Scene changes.
+//
+// Columns: [0] display name ("NameComponent" or "Entity <id>")
 //
 #include "ecs.h"
 #include <QAbstractItemModel>
@@ -25,14 +24,16 @@ public:
                     const QModelIndex &parent = QModelIndex()) const override {
     if (!parent.isValid() && row >= 0 &&
         row < static_cast<int>(entities_.size()))
-      return createIndex(row, column, nullptr);
+      return createIndex(row, column);
     return {};
   }
 
   QModelIndex parent(const QModelIndex &) const override { return {}; }
+
   int rowCount(const QModelIndex &parent = QModelIndex()) const override {
     return parent.isValid() ? 0 : static_cast<int>(entities_.size());
   }
+
   int columnCount(const QModelIndex & = QModelIndex()) const override {
     return 1;
   }
@@ -49,59 +50,60 @@ public:
 
     Entity e = entities_[idx.row()];
 
-    if (role == Qt::DisplayRole) {
-      if (auto *name = scene_->reg.get<NameComponent>(e)) {
-        return QString::fromStdString(name->name);
+    switch (role) {
+    case Qt::DisplayRole:
+      if (auto *n = scene_->reg.get<NameComponent>(e))
+        return QString::fromStdString(n->name);
+      return QStringLiteral("Entity %1").arg(static_cast<qulonglong>(e));
+
+    case ShapePropertiesRole:
+      if (auto *sc = scene_->reg.get<ShapeComponent>(e))
+        if (sc->shape)
+          return sc->shape->serialize();
+      break;
+
+    case ScriptPropertiesRole:
+      if (auto *scr = scene_->reg.get<ScriptComponent>(e)) {
+        QVariantMap m;
+        m["scriptPath"] = QString::fromStdString(scr->scriptPath);
+        m["startFunction"] = QString::fromStdString(scr->startFunction);
+        m["updateFunction"] = QString::fromStdString(scr->updateFunction);
+        m["destroyFunction"] = QString::fromStdString(scr->destroyFunction);
+        return m;
       }
-      return QString("Entity %1").arg(e);
-    } else if (role == ShapePropertiesRole) {
-      if (auto *shapeComp = scene_->reg.get<ShapeComponent>(e)) {
-        if (shapeComp->shape) {
-          return shapeComp->shape->serialize();
-        }
-      }
-    } else if (role == ScriptPropertiesRole) {
-      if (auto *script = scene_->reg.get<ScriptComponent>(e)) {
-        QVariantMap properties;
-        properties["scriptPath"] = QString::fromStdString(script->scriptPath);
-        properties["startFunction"] =
-            QString::fromStdString(script->startFunction);
-        properties["updateFunction"] =
-            QString::fromStdString(script->updateFunction);
-        properties["destroyFunction"] =
-            QString::fromStdString(script->destroyFunction);
-        return properties;
-      }
+      break;
+
+    default:
+      break;
     }
     return {};
   }
 
+  // helper ---------------------------------------------------------------
   Entity getEntity(const QModelIndex &idx) const {
-    if (!idx.isValid())
-      return kInvalidEntity;
-    return entities_[idx.row()];
+    return idx.isValid() ? entities_[idx.row()] : kInvalidEntity;
   }
 
-  QModelIndex indexOfEntity(Entity entity) const {
-    auto it = std::find(entities_.begin(), entities_.end(), entity);
-    if (it != entities_.end()) {
-      return createIndex(std::distance(entities_.begin(), it), 0);
-    }
-    return QModelIndex();
+  QModelIndex indexOfEntity(Entity e) const {
+    auto it = std::find(entities_.begin(), entities_.end(), e);
+    return it != entities_.end()
+               ? createIndex(
+                     static_cast<int>(std::distance(entities_.begin(), it)), 0)
+               : QModelIndex();
   }
 
   // ---------------------------------------------------------------------
-  //  Public helper to rebuild the list when the scene changes
+  //  repopulate list after scene edits
   // ---------------------------------------------------------------------
   void refresh() {
+    beginResetModel();
     entities_.clear();
     scene_->reg.each<TransformComponent>(
-        [&](Entity e, auto &) { entities_.push_back(e); });
-    beginResetModel();
+        [&](Entity e, const TransformComponent &) { entities_.push_back(e); });
     endResetModel();
   }
 
 private:
-  Scene *scene_ = nullptr; // non‑owning
+  Scene *scene_ = nullptr; // non-owning
   std::vector<Entity> entities_;
 };

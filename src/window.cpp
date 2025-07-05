@@ -1,22 +1,25 @@
 #include "window.h"
 #include "serialization.h"
+
 #include <QAction>
 #include <QMenu>
 #include <QMetaProperty>
 #include <QMetaType>
 #include <QObject>
+#include <QtMath>
 #include <type_traits>
 
 template <typename NumWidget, typename Getter, typename Setter>
-NumWidget *makeSpinBox(QWidget *parent, double min, double max, double step,
-                       Getter getter, Setter setter) {
+static NumWidget *makeSpinBox(QWidget *parent, double min, double max,
+                              double step, Getter getter, Setter setter) {
   auto *w = new NumWidget(parent);
   w->setRange(min, max);
+
   if constexpr (std::is_same_v<NumWidget, QSpinBox>) {
     w->setValue(static_cast<int>(getter()));
     QObject::connect(w, QOverload<int>::of(&QSpinBox::valueChanged), parent,
                      [setter](int v) { setter(v); });
-  } else { // QDoubleSpinBox
+  } else {
     w->setSingleStep(step);
     w->setDecimals(3);
     w->setValue(getter());
@@ -36,7 +39,8 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
     w->setDecimals(3);
     w->setValue(initial.toFloat());
     QObject::connect(w, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                     parent, [setter](float v) { setter(v); });
+                     parent,
+                     [setter](double v) { setter(static_cast<float>(v)); });
     return w;
   }
   case QMetaType::Double: {
@@ -72,7 +76,6 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
   case QMetaType::QColor: {
     auto *btn = new QPushButton(QObject::tr("Pick"), parent);
 
-    // helper that colours the button
     auto updateBtnColor = [btn](const QColor &c) {
       QPalette pal(btn->palette());
       pal.setColor(QPalette::Button, c);
@@ -81,15 +84,13 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
     };
     updateBtnColor(initial.value<QColor>());
 
-    QObject::connect(btn, &QPushButton::clicked, parent,
-                     [=] { // capture everything by value
-                       QColor c = QColorDialog::getColor(
-                           initial.value<QColor>(), parent);
-                       if (c.isValid()) {
-                         updateBtnColor(c);
-                         setter(c);
-                       }
-                     });
+    QObject::connect(btn, &QPushButton::clicked, parent, [=] {
+      QColor c = QColorDialog::getColor(initial.value<QColor>(), parent);
+      if (c.isValid()) {
+        updateBtnColor(c);
+        setter(c);
+      }
+    });
     return btn;
   }
   default:
@@ -97,32 +98,32 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
   }
 }
 
-template <typename Gadget>
-QWidget *MainWindow::buildGadgetEditor(Gadget &g, QWidget *parent,
-                                       std::function<void()> onChange) {
-  const QMetaObject &mo = Gadget::staticMetaObject;
-  auto *form = new QFormLayout();
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent), m_canvas(new SkiaCanvasWidget(this)),
+      m_undoStack(new QUndoStack(this)) {
+  setCentralWidget(m_canvas);
 
-  for (int i = mo.propertyOffset(); i < mo.propertyCount(); ++i) {
-    QMetaProperty mp = mo.property(i);
-    QVariant val = mp.readOnGadget(&g);
+  createMenus();
+  createToolbox();
+  createSceneDock();
+  createPropertiesDock();
+  createTimelineDock();
 
-    QWidget *ed = makeEditor(
-        parent, mp,
-        /*setter*/
-        [&, mp, onChange](QVariant v) {
-          mp.writeOnGadget(&g, v);
-          if (onChange)
-            onChange();
-        },
-        val);
+  connect(m_canvas, &SkiaCanvasWidget::sceneChanged, this,
+          [this] { m_sceneModel->refresh(); });
 
-    form->addRow(QString::fromLatin1(mp.name()), ed);
-  }
+  captureInitialScene();
+}
 
-  auto *box = new QGroupBox(parent);
-  box->setLayout(form);
-  return box;
+MainWindow::~MainWindow() {
+  disconnect(m_sceneTree->selectionModel(),
+             &QItemSelectionModel::selectionChanged, this,
+             &MainWindow::onSceneSelectionChanged);
+  m_canvas->scene().clear();
+}
+
+void MainWindow::captureInitialScene() {
+  m_initialSceneJson = m_canvas->scene().serialize();
 }
 
 void MainWindow::createMenus() {
@@ -221,6 +222,10 @@ void MainWindow::createSceneDock() {
           &MainWindow::onCanvasSelectionChanged);
   connect(m_canvas, &SkiaCanvasWidget::transformationCompleted, this,
           &MainWindow::onTransformationCompleted);
+  connect(m_canvas, &SkiaCanvasWidget::dragStarted, this,
+          [this] { m_isDragging = true; });
+  connect(m_canvas, &SkiaCanvasWidget::dragEnded, this,
+          [this] { m_isDragging = false; });
 }
 
 void MainWindow::createPropertiesDock() {
@@ -288,30 +293,33 @@ void MainWindow::onStopResetButtonClicked() {
   m_animationTimer->stop();
   m_isPlaying = false;
   m_playPauseButton->setText("Play");
-  m_currentTime = 0.0f;
-  m_canvas->setCurrentTime(m_currentTime);
+  m_currentTime = 0.f;
+
   resetScene();
+
+  m_canvas->setCurrentTime(m_currentTime);
   m_canvas->update();
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
 }
 
 void MainWindow::onAnimationTimerTimeout() {
-  m_currentTime += m_animationTimer->interval() / 1000.0f;
+  m_currentTime += m_animationTimer->interval() / 1000.f;
   if (m_currentTime > m_animationDuration) {
     resetScene();
-    m_currentTime = 0.0f;
+    m_currentTime = 0.f;
   }
+
   m_canvas->setCurrentTime(m_currentTime);
   m_canvas->update();
-  m_canvas->scene().scriptSystem.tick(m_animationTimer->interval() / 1000.0f,
+  m_canvas->scene().scriptSystem.tick(m_animationTimer->interval() / 1000.f,
                                       m_currentTime);
   m_timelineSlider->setValue(static_cast<int>(m_currentTime * 100));
   updateTimeDisplay();
 }
 
 void MainWindow::onTimelineSliderMoved(int value) {
-  m_currentTime = value / 100.0f;
+  m_currentTime = value / 100.f;
   m_canvas->setCurrentTime(m_currentTime);
   m_canvas->update();
   updateTimeDisplay();
@@ -321,6 +329,34 @@ void MainWindow::updateTimeDisplay() {
   m_timeDisplayLabel->setText(QString("%1s / %2s")
                                   .arg(m_currentTime, 0, 'f', 2)
                                   .arg(m_animationDuration, 0, 'f', 2));
+}
+
+template <typename Gadget>
+QWidget *MainWindow::buildGadgetEditor(Gadget &g, QWidget *parent,
+                                       std::function<void()> onChange) {
+  const QMetaObject &mo = Gadget::staticMetaObject;
+  auto *form = new QFormLayout();
+
+  for (int i = mo.propertyOffset(); i < mo.propertyCount(); ++i) {
+    QMetaProperty mp = mo.property(i);
+    QVariant val = mp.readOnGadget(&g);
+
+    QWidget *ed = makeEditor(
+        parent, mp,
+        /*setter*/
+        [&, mp, onChange](QVariant v) {
+          mp.writeOnGadget(&g, v);
+          if (onChange)
+            onChange();
+        },
+        val);
+
+    form->addRow(QString::fromLatin1(mp.name()), ed);
+  }
+
+  auto *box = new QGroupBox(parent);
+  box->setLayout(form);
+  return box;
 }
 
 void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
@@ -392,8 +428,10 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     auto *g = new QGroupBox(tr("Transform"));
     auto *fl = new QFormLayout(g);
 
-    auto addEditor = [&](const QString &label, auto getter, auto setter) {
+    auto addEditor = [&](const QString &label, const QString &objName,
+                         auto getter, auto setter) {
       auto *spinbox = new QDoubleSpinBox(this);
+      spinbox->setObjectName(objName);
       spinbox->setRange(-10000, 10000);
       spinbox->setDecimals(3);
       spinbox->setValue(getter(tc));
@@ -445,17 +483,19 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
     // The getter/setter lambdas remain the same.
     addEditor(
-        "X", [](auto *c) { return c->x; }, [](auto &c, double v) { c.x = v; });
+        "X", "tx", [](auto *c) { return c->x; },
+        [](auto &c, double v) { c.x = v; });
     addEditor(
-        "Y", [](auto *c) { return c->y; }, [](auto &c, double v) { c.y = v; });
+        "Y", "ty", [](auto *c) { return c->y; },
+        [](auto &c, double v) { c.y = v; });
     addEditor(
-        "Rotation", [](auto *c) { return c->rotation * 180.0 / M_PI; },
+        "Rotation", "rot", [](auto *c) { return c->rotation * 180.0 / M_PI; },
         [](auto &c, double v) { c.rotation = v * M_PI / 180.0; });
     addEditor(
-        "Scale X", [](auto *c) { return c->sx; },
+        "Scale X", "sx", [](auto *c) { return c->sx; },
         [](auto &c, double v) { c.sx = v; });
     addEditor(
-        "Scale Y", [](auto *c) { return c->sy; },
+        "Scale Y", "sy", [](auto *c) { return c->sy; },
         [](auto &c, double v) { c.sy = v; });
 
     m_propsLayout->addRow(g);
@@ -628,82 +668,81 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
   }
 }
 
+void MainWindow::syncTransformEditors(Entity e) {
+  if (auto *tr = m_canvas->scene().reg.get<TransformComponent>(e)) {
+    auto upd = [&](const char *name, double v) {
+      if (auto *sb = findChild<QDoubleSpinBox *>(name)) {
+        QSignalBlocker blk(sb); // avoid feedback
+        sb->setValue(v);
+      }
+    };
+
+    upd("tx", tr->x);
+    upd("ty", tr->y);
+    upd("rot", tr->rotation * 180.0 / M_PI);
+    upd("sx", tr->sx);
+    upd("sy", tr->sy);
+  }
+}
+
 void MainWindow::onNewFile() {
   m_canvas->scene().clear();
   m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
-  m_initialRegistry = m_canvas->scene().reg; // Save initial state
+  captureInitialScene();
   m_sceneModel->refresh();
   m_canvas->update();
 }
 
 void MainWindow::onOpenFile() {
-  QString filePath = QFileDialog::getOpenFileName(
-      this, tr("Open Scene"), QString(), tr("Scene Files (*.json)"));
-  if (filePath.isEmpty()) {
+  QString filePath = QFileDialog::getOpenFileName(this, tr("Open Scene"), {},
+                                                  tr("Scene Files (*.json)"));
+  if (filePath.isEmpty())
     return;
-  }
 
   QFile loadFile(filePath);
   if (!loadFile.open(QIODevice::ReadOnly)) {
-    qWarning("Couldn't open save file.");
+    qWarning("Couldn't open scene file.");
     return;
   }
 
-  QByteArray saveData = loadFile.readAll();
-  QJsonDocument loadDoc(QJsonDocument::fromJson(saveData));
-
-  m_canvas->scene().deserialize(loadDoc.object());
-  m_initialRegistry = m_canvas->scene().reg; // Update initial state
+  QJsonDocument doc(QJsonDocument::fromJson(loadFile.readAll()));
+  m_canvas->scene().deserialize(doc.object());
+  captureInitialScene();
   m_sceneModel->refresh();
   m_canvas->update();
 }
 
 void MainWindow::onSaveFile() {
-  QString filePath = QFileDialog::getSaveFileName(
-      this, tr("Save Scene"), QString(), tr("Scene Files (*.json)"));
-  if (filePath.isEmpty()) {
+  QString filePath = QFileDialog::getSaveFileName(this, tr("Save Scene"), {},
+                                                  tr("Scene Files (*.json)"));
+  if (filePath.isEmpty())
     return;
-  }
 
   QFile saveFile(filePath);
   if (!saveFile.open(QIODevice::WriteOnly)) {
-    qWarning("Couldn't open save file.");
+    qWarning("Couldn't open scene file for writing.");
     return;
   }
 
-  QJsonObject gameObject = m_canvas->scene().serialize();
-  QJsonDocument saveDoc(gameObject);
+  QJsonDocument saveDoc(m_canvas->scene().serialize());
   saveFile.write(saveDoc.toJson());
 }
 
-void MainWindow::onTransformChanged(Entity entity) {
-  // If the UI is the source of the change, do not refresh it.
-  if (m_isUpdatingFromUI) {
-    return;
-  }
+void MainWindow::resetScene() {
+  m_canvas->scene().clear();
+  m_canvas->scene().deserialize(m_initialSceneJson);
 
-  // Get the currently selected index from the scene tree
-  QModelIndexList selectedIndexes =
-      m_sceneTree->selectionModel()->selectedIndexes();
-  if (!selectedIndexes.isEmpty()) {
-    Entity currentSelectedEntity =
-        m_sceneModel->getEntity(selectedIndexes.first());
-    if (currentSelectedEntity == entity) {
-      // If the transformed entity is the one currently selected in the
-      // tree, force a refresh of the properties panel by directly calling
-      // onSceneSelectionChanged with the current selection.
-      onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
-                              QItemSelection());
-    }
-  }
+  m_sceneModel->refresh();
+  if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty())
+    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                            QItemSelection());
 }
+
 void MainWindow::onCut() {
-  if (m_selectedEntities.isEmpty()) {
+  if (m_selectedEntities.isEmpty())
     return;
-  }
-  onCopy(); // Copy selected entities to clipboard
-  m_undoStack->push(
-      new DeleteCommand(this, m_selectedEntities)); // Then delete them
+  onCopy();
+  m_undoStack->push(new DeleteCommand(this, m_selectedEntities));
   m_selectedEntities.clear();
   m_canvas->setSelectedEntities({});
   m_sceneModel->refresh();
@@ -711,9 +750,8 @@ void MainWindow::onCut() {
 }
 
 void MainWindow::onDelete() {
-  if (m_selectedEntities.isEmpty()) {
+  if (m_selectedEntities.isEmpty())
     return;
-  }
   m_undoStack->push(new DeleteCommand(this, m_selectedEntities));
   m_selectedEntities.clear();
   m_canvas->setSelectedEntities({});
@@ -739,20 +777,43 @@ void MainWindow::onPaste() {
   if (!doc.isArray())
     return;
 
-  Scene &scene = m_canvas->scene(); // shorthand
+  Scene &scene = m_canvas->scene();
   for (const QJsonValue &v : doc.array()) {
     if (!v.isObject())
       continue;
-
-    Entity e = scene.reg.create(); // ➊ new entity
-    ComponentRegistry::instance()  // ➋ let registry build it
-        .apply(scene, e, v.toObject());
-
+    Entity e = scene.reg.create();
+    ComponentRegistry::instance().apply(scene, e, v.toObject());
     m_undoStack->push(new AddEntityCommand(this, e));
   }
 
   m_sceneModel->refresh();
   m_canvas->update();
+}
+
+void MainWindow::onTransformChanged(Entity entity) {
+  if (m_isUpdatingFromUI) {
+    return;
+  }
+
+  if (m_isDragging) {
+    syncTransformEditors(entity);
+    return;
+  }
+
+  // Get the currently selected index from the scene tree
+  QModelIndexList selectedIndexes =
+      m_sceneTree->selectionModel()->selectedIndexes();
+  if (!selectedIndexes.isEmpty()) {
+    Entity currentSelectedEntity =
+        m_sceneModel->getEntity(selectedIndexes.first());
+    if (currentSelectedEntity == entity) {
+      // If the transformed entity is the one currently selected in the
+      // tree, force a refresh of the properties panel by directly calling
+      // onSceneSelectionChanged with the current selection.
+      onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                              QItemSelection());
+    }
+  }
 }
 
 void MainWindow::onCanvasSelectionChanged(const QList<Entity> &entities) {
@@ -772,6 +833,7 @@ void MainWindow::onTransformationCompleted(Entity entity, float oldX,
                                            float oldY, float oldRotation,
                                            float newX, float newY,
                                            float newRotation) {
+  m_isDragging = false;
   m_undoStack->push(new MoveEntityCommand(this, entity, oldX, oldY, oldRotation,
                                           newX, newY, newRotation));
 }
@@ -789,31 +851,4 @@ void MainWindow::clearLayout(QLayout *layout) {
     }
     delete item;
   }
-}
-
-void MainWindow::resetScene() {
-  m_canvas->scene().reg = m_initialRegistry; // Copy back the initial state
-  m_sceneModel->refresh(); // Refresh the model to reflect changes
-  // Re-select the entity to update properties panel if needed
-  if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty()) {
-    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
-                            QItemSelection());
-  }
-}
-
-MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), m_canvas(new SkiaCanvasWidget(this)),
-      m_undoStack(new QUndoStack(this)), m_isPlaying(false),
-      m_currentTime(0.0f), m_animationDuration(10.0f),
-      m_isUpdatingFromUI(false) {
-  setCentralWidget(m_canvas);
-
-  createMenus();
-  createToolbox();
-  createSceneDock();
-  createPropertiesDock();
-  createTimelineDock();
-
-  connect(m_canvas, &SkiaCanvasWidget::sceneChanged, this,
-          [this]() { m_sceneModel->refresh(); });
 }

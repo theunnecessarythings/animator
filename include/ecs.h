@@ -1,16 +1,7 @@
 #pragma once
-/*
- * A **header‑only, zero‑dependency ECS** tailored for our Qt + Skia editor.
- * - Entity  = uint32_t handle    (0 == invalid)
- * - Component storage is a sparse unordered_map per type
- * - Registry owns the storage and offers `emplace<T>()`, `get<T>()`,
- * `has<T>()`.
- * - Systems are plain structs with a `tick(Registry&, float dt)` or `render()`.
- *
- * Enough to support:        ─► drag‑and‑drop creates entity + ShapeComponent +
- * Transfo m ─► RenderSystem iterates and draws via Skia ─► SceneModel (QA
- * stractItemModel) reflects Registry for the UI
- */
+
+#define FLECS_CPP
+#include <flecs.h>
 
 #include "include/codec/SkCodec.h"
 #include "include/core/SkBitmap.h"
@@ -21,6 +12,7 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -31,6 +23,7 @@
 #include <QObject>
 #include <QPropertyAnimation>
 #include <QVariant>
+
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -39,12 +32,14 @@
 #include <memory>
 #include <sol/sol.hpp>
 #include <string>
-#include <typeindex>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 
+// ──────────────────────────────────────────────────────────────────────────────
+// helpers
+// ──────────────────────────────────────────────────────────────────────────────
 template <typename Gadget>
 static void fillFromJson(Gadget &dst, const QJsonObject &src) {
   const QMetaObject &mo = Gadget::staticMetaObject;
@@ -54,13 +49,68 @@ static void fillFromJson(Gadget &dst, const QJsonObject &src) {
       p.writeOnGadget(&dst, src[p.name()].toVariant());
   }
 }
-// -----------------------------------------------------------------------------
-//  Core types
-// -----------------------------------------------------------------------------
-using Entity = uint32_t;
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  Component types
+// ──────────────────────────────────────────────────────────────────────────────
+using Entity = flecs::id_t;
 static constexpr Entity kInvalidEntity = 0;
 
-struct Scene;
+struct NameComponent {
+  std::string name;
+};
+
+struct MaterialComponent {
+  SkColor color = SK_ColorBLUE;
+  bool isFilled = true;
+  bool isStroked = false;
+  float strokeWidth = 1.f;
+  bool antiAliased = true;
+};
+
+struct AnimationComponent {
+  float entryTime = 0.f, exitTime = 5.f;
+};
+
+struct ScriptComponent {
+  std::string scriptPath;
+  std::string startFunction = "on_start";
+  std::string updateFunction = "on_update";
+  std::string destroyFunction = "on_destroy";
+  sol::table scriptEnv; // each script gets its own Lua env
+};
+
+struct SceneBackgroundComponent {}; // tag
+
+struct TransformComponent {
+  float x = 0.f, y = 0.f;
+  float rotation = 0.f;     // radians
+  float sx = 1.f, sy = 1.f; // scale
+};
+
+#include "shapes.h"
+
+struct ShapeComponent {
+  std::unique_ptr<Shape> shape;
+  ShapeComponent() = default;
+  ShapeComponent(ShapeComponent &&) noexcept = default;
+  ShapeComponent &operator=(ShapeComponent &&) noexcept = default;
+
+  ShapeComponent(const ShapeComponent &other) {
+    if (other.shape)
+      shape = other.shape->clone();
+  }
+  ShapeComponent &operator=(const ShapeComponent &other) {
+    if (this != &other)
+      shape = other.shape ? other.shape->clone() : nullptr;
+    return *this;
+  }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  Runtime-component registry for JSON loading
+// ──────────────────────────────────────────────────────────────────────────────
+struct Scene; // fwd
 
 class ComponentRegistry {
 public:
@@ -75,209 +125,116 @@ public:
     map_.insert(key, std::move(fn));
   }
 
-  // Walk every key in the entity-object and dispatch if we know it
   void apply(Scene &scene, Entity e, const QJsonObject &json) const {
-    for (auto it = json.constBegin(); it != json.constEnd(); ++it) {
-      auto found = map_.find(it.key());
-      if (found != map_.end())
+    for (auto it = json.constBegin(); it != json.constEnd(); ++it)
+      if (auto found = map_.find(it.key()); found != map_.end())
         found.value()(scene, e, it.value());
-    }
   }
 
 private:
   QHash<QString, Fn> map_;
 };
 
-struct NameComponent {
-  std::string name;
-};
-
-struct MaterialComponent {
-  SkColor color = SK_ColorBLUE;
-  bool isFilled = true;
-  bool isStroked = false;
-  float strokeWidth = 1.0f;
-  bool antiAliased = true;
-};
-
-struct AnimationComponent {
-  float entryTime = 0.0f;
-  float exitTime = 5.0f;
-};
-
-struct ScriptComponent {
-  std::string scriptPath;
-  std::string startFunction = "on_start";
-  std::string updateFunction = "on_update";
-  std::string destroyFunction = "on_destroy";
-  sol::table scriptEnv; // Each script gets its own environment/table
-};
-
-struct SceneBackgroundComponent {}; // Tag component for the background
-
-struct TransformComponent {
-  float x = 0.f, y = 0.f;
-  float rotation = 0.f;     // radians
-  float sx = 1.f, sy = 1.f; // scale
-};
-
-#include "shapes.h"
-
-struct ShapeComponent {
-  std::unique_ptr<Shape> shape;
-  ShapeComponent() = default;
-  ShapeComponent(ShapeComponent &&other) noexcept = default;
-  ShapeComponent &operator=(ShapeComponent &&other) noexcept = default;
-
-  ShapeComponent(const ShapeComponent &other) {
-    if (other.shape) {
-      shape = other.shape->clone();
-    }
-  }
-  ShapeComponent &operator=(const ShapeComponent &other) {
-    if (this != &other) {
-      shape = other.shape ? other.shape->clone() : nullptr;
-    }
-    return *this;
-  }
-};
-
-// ----------------------------------------------------------------------------
-//  Component storage interface (type‑erased)
-// ----------------------------------------------------------------------------
-class IComponentStorage {
-public:
-  virtual ~IComponentStorage() = default;
-  virtual void remove(Entity e) = 0;
-  virtual std::shared_ptr<IComponentStorage> clone() const = 0;
-};
-
-template <class T> class ComponentStorage final : public IComponentStorage {
-public:
-  template <class... Args> T &emplace(Entity e, Args &&...args) {
-    auto [it, ok] = data_.try_emplace(e, std::forward<Args>(args)...);
-    return it->second; // returns existing if already present
-  }
-  bool has(Entity e) const { return data_.count(e) != 0; }
-  T *get(Entity e) {
-    auto it = data_.find(e);
-    return it == data_.end() ? nullptr : &it->second;
-  }
-  const T *get(Entity e) const {
-    auto it = data_.find(e);
-    return it == data_.end() ? nullptr : &it->second;
-  }
-
-  void remove(Entity e) override { data_.erase(e); }
-
-  std::shared_ptr<IComponentStorage> clone() const override {
-    return std::make_shared<ComponentStorage<T>>(*this);
-  }
-
-  auto begin() { return data_.begin(); }
-  auto end() { return data_.end(); }
-
-  auto begin() const { return data_.cbegin(); }
-  auto end() const { return data_.cend(); }
-
-  auto cbegin() const { return data_.cbegin(); }
-  auto cend() const { return data_.cend(); }
-
-private:
-  std::unordered_map<Entity, T> data_;
-};
-
-// ----------------------------------------------------------------------------
-//  Registry: central API the editor interacts with
-// ----------------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────────
+//  Registry  → thin wrapper around flecs::world
+// ──────────────────────────────────────────────────────────────────────────────
 class Registry {
 public:
   Registry() = default;
-  Registry(const Registry &other) : next_(other.next_) {
-    for (const auto &pair : other.pools_) {
-      pools_.emplace(pair.first, pair.second->clone());
+  Registry(const Registry &) = delete;
+  Registry &operator=(const Registry &) = delete;
+
+  // Entity life-cycle -------------------------------------------------------
+  Entity create() {
+    flecs::entity fe = world_.entity();
+    Entity id = fe.id();
+    idMap_[id] = fe;
+    return id;
+  }
+
+  void destroy(Entity id) {
+    if (scriptDestroyCallback)
+      scriptDestroyCallback(id);
+
+    if (auto it = idMap_.find(id); it != idMap_.end()) {
+      it->second.destruct();
+      idMap_.erase(it);
     }
   }
 
-  Registry &operator=(const Registry &other) {
-    if (this != &other) { // Prevent self-assignment
-      pools_.clear();     // Clear current pools
-      for (const auto &pair : other.pools_) {
-        pools_.emplace(pair.first, pair.second->clone()); // Deep copy
-      }
-      next_ = other.next_;
+  // Component access --------------------------------------------------------
+  template <class T, class... Args> T &emplace(Entity id, Args &&...args) {
+    flecs::entity e = fetch(id);
+
+    if constexpr (std::is_empty_v<T>) {
+      e.add<T>();
+      static T dummy{};
+      return dummy;
+    } else {
+      e.set<T>({std::forward<Args>(args)...});
+
+      if constexpr (std::is_pointer_v<decltype(e.get_mut<T>())>)
+        return *e.get_mut<T>();
+      else
+        return e.get_mut<T>();
     }
-    return *this;
   }
 
-  Entity create() { return next_++; }
-  void destroy(Entity e) {
-    // Notify ScriptSystem before removing components
-    if (scriptDestroyCallback) {
-      scriptDestroyCallback(e);
-    }
-    for (auto &[_, stor] : pools_)
-      stor->remove(e);
+  template <class T> T *get(Entity id) {
+    flecs::entity e = fetch(id);
+    if (!e.has<T>()) // <-- guard
+      return nullptr;
+
+    if constexpr (std::is_pointer_v<decltype(e.get_mut<T>())>)
+      return e.get_mut<T>(); // Flecs ≤3
+    else
+      return &e.get_mut<T>(); // Flecs 4
   }
 
-  // Callback for ScriptSystem to hook into entity destruction
+  // const overload
+  template <class T> const T *get(Entity id) const {
+    flecs::entity e = fetch(id);
+    if (!e.has<T>()) // <-- guard
+      return nullptr;
+
+    if constexpr (std::is_pointer_v<decltype(e.get<T>())>)
+      return e.get<T>(); // pointer
+    else
+      return &e.get<T>(); // reference → pointer
+  }
+  template <class T> bool has(Entity id) const {
+    if (auto it = idMap_.find(id); it != idMap_.end())
+      return it->second.has<T>();
+    return false;
+  }
+
+  // iteration ---------------------------------------------------------------
+  template <class T, class F> void each(F &&fn) {
+    world_.each<T>([&](flecs::entity e, T &comp) { fn(e.id(), comp); });
+  }
+  template <class T, class F> void each(F &&fn) const {
+    const_cast<flecs::world &>(world_) // C API trait; safe here
+        .each<T>([&](flecs::entity e, const T &comp) { fn(e.id(), comp); });
+  }
+
+  // Lua script hook ---------------------------------------------------------
   std::function<void(Entity)> scriptDestroyCallback;
 
-  template <class T> ComponentStorage<T> &storage() {
-    const std::type_index idx = typeid(T);
-    auto it = pools_.find(idx);
-    if (it == pools_.end()) {
-      auto ptr = std::make_shared<ComponentStorage<T>>();
-      auto raw = ptr.get();
-      pools_.emplace(idx, std::move(ptr));
-      return *raw;
-    }
-    return *static_cast<ComponentStorage<T> *>(it->second.get());
-  }
-
-  template <class T> const ComponentStorage<T> &storage() const {
-    const std::type_index idx = typeid(T);
-    auto it = pools_.find(idx);
-    if (it == pools_.end()) {
-      // This should ideally not happen in a const context if the component is
-      // expected to exist. Or, handle error appropriately.
-      throw std::runtime_error("Attempted to access non-existent component "
-                               "storage in const context.");
-    }
-    return *static_cast<const ComponentStorage<T> *>(it->second.get());
-  }
-
-  template <class T, class... Args> T &emplace(Entity e, Args &&...args) {
-    return storage<T>().emplace(e, std::forward<Args>(args)...);
-  }
-
-  template <class T> T *get(Entity e) { return storage<T>().get(e); }
-  template <class T> const T *get(Entity e) const {
-    return storage<T>().get(e);
-  }
-
-  template <class T> bool has(Entity e) const {
-    auto it = pools_.find(std::type_index(typeid(T)));
-    return it != pools_.end() &&
-           static_cast<ComponentStorage<T> *>(it->second.get())->has(e);
-  }
-
-  // Simple view: iterate over all (Entity, T&) pairs.  Extend as needed.
-  template <class T, class F> void each(F &&fn) {
-    for (auto &[e, comp] : storage<T>())
-      fn(e, comp);
-  }
-
-  template <class T, class F> void each(F &&fn) const {
-    for (auto &[e, comp] : storage<T>())
-      fn(e, comp);
-  }
+  flecs::world &world() { return world_; }
+  const flecs::world &world() const { return world_; }
 
 private:
-  Entity next_ = 1;
-  std::unordered_map<std::type_index, std::shared_ptr<IComponentStorage>>
-      pools_;
+  flecs::entity fetch(Entity id) const {
+    auto it = idMap_.find(id);
+    assert(it != idMap_.end() && "Invalid Entity handle");
+    return it->second;
+  }
+
+  mutable flecs::world world_;
+  std::unordered_map<Entity, flecs::entity> idMap_;
 };
+
+#include "render.h"
 
 // ----------------------------------------------------------------------------
 //  ScriptingEngine: Manages Lua runtime and script execution
@@ -399,8 +356,6 @@ private:
   Registry &reg_;
   ScriptingEngine &scriptEngine_;
 };
-
-#include "render.h"
 
 struct Scene {
   Registry reg;
