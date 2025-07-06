@@ -1,7 +1,6 @@
 #pragma once
 
 #include "canvas.h"
-#include "commands.h"
 #include "scene_model.h"
 #include "toolbox.h"
 
@@ -44,6 +43,7 @@ public:
 
   /** Take a JSON snapshot of the current scene (used for “Stop/Reset”). */
   void captureInitialScene();
+  void refreshProperties();
 
 private slots:
   // Playback/Timeline
@@ -52,7 +52,6 @@ private slots:
   void onAnimationTimerTimeout();
   void onTimelineSliderMoved(int value);
   void updateTimeDisplay();
-
   // Scene selection
   void onSceneSelectionChanged(const QItemSelection &selected,
                                const QItemSelection &deselected);
@@ -90,6 +89,10 @@ private:
   template <typename Gadget>
   QWidget *buildGadgetEditor(Gadget &g, QWidget *parent,
                              std::function<void()> onChange);
+  template <typename T>
+  void buildAttachableComponentEditor(
+      Entity e, const QString &groupName,
+      std::function<void(QFormLayout *, T &)> editorBuilder);
 
   // Widgets & models ---------------------------------------------------------
   SkiaCanvasWidget *m_canvas = nullptr;
@@ -114,4 +117,5 @@ private:
 
   /* snapshot of the scene at launch / after Stop */
   QJsonObject m_initialSceneJson;
+  QJsonObject m_preSimulationState;
 };

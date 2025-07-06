@@ -1,5 +1,3 @@
-#include "ecs.h"
-
 #include "shapes.h"
 
 void RectangleShape::rebuildPath() const {

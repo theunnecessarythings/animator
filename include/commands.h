@@ -1,18 +1,74 @@
 #pragma once
 
 #include "ecs.h"
+#include "serialization.h"
+#include "window.h"
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
 #include <QUndoCommand>
 
 class Scene;
-class MainWindow;
+
+void applyJsonToEntity(flecs::world &world, flecs::entity e,
+                       const QJsonObject &o, bool is_paste);
 
 class SceneCommand : public QUndoCommand {
 public:
   using QUndoCommand::QUndoCommand;
-  virtual void updateEntityIds(const QMap<qint64, Entity> &idMap) {}
+  template <typename T> static const char *getComponentJsonKey();
+  virtual void updateEntityIds(const QMap<qint64, Entity> &) {}
+};
+
+template <typename T> class SetComponentCommand : public SceneCommand {
+public:
+  SetComponentCommand(MainWindow *window, Entity entity,
+                      const QJsonObject &oldData, const QJsonObject &newData,
+                      QUndoCommand *parent = nullptr)
+      : SceneCommand(parent), m_mainWindow(window), m_entity(entity),
+        m_oldData(oldData), m_newData(newData) {
+    setText(QObject::tr("Set %1").arg(getComponentJsonKey<T>()));
+  }
+
+  void undo() override {
+    if (!m_entity.is_alive())
+      return;
+    // If old data was empty, it means the component didn't exist. So, remove
+    // it.
+    if (m_oldData.isEmpty()) {
+      m_entity.remove<T>();
+    } else {
+      // Otherwise, restore the old data.
+      QJsonObject wrapper{{getComponentJsonKey<T>(), m_oldData}};
+      applyJsonToEntity(m_mainWindow->canvas()->scene().ecs(), m_entity,
+                        wrapper, false);
+    }
+    m_mainWindow->refreshProperties();
+  }
+
+  void redo() override {
+    if (!m_entity.is_alive())
+      return;
+    if (m_newData.isEmpty()) {
+      m_entity.remove<T>();
+    } else {
+      QJsonObject wrapper{{getComponentJsonKey<T>(), m_newData}};
+      applyJsonToEntity(m_mainWindow->canvas()->scene().ecs(), m_entity,
+                        wrapper, false);
+    }
+    m_mainWindow->refreshProperties();
+  }
+
+  void updateEntityIds(const QMap<qint64, Entity> &idMap) override {
+    if (idMap.contains(m_entity.id())) {
+      m_entity = idMap.value(m_entity.id());
+    }
+  }
+
+private:
+  MainWindow *m_mainWindow;
+  Entity m_entity;
+  QJsonObject m_oldData, m_newData;
 };
 
 class AddEntityCommand : public SceneCommand {
@@ -197,6 +253,3 @@ private:
   Entity m_entity;
   QJsonObject m_oldProps, m_newProps;
 };
-
-void applyJsonToEntity(flecs::world &world, flecs::entity e,
-                       const QJsonObject &o, bool is_paste);

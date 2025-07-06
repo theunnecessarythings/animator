@@ -7,6 +7,7 @@
 #include <QMenu>
 #include <QMetaProperty>
 #include <QMetaType>
+#include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
 
@@ -236,11 +237,15 @@ void MainWindow::createPropertiesDock() {
   auto *propDock = new QDockWidget(tr("Properties"), this);
   propDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
-  auto *propWidget = new QWidget(propDock);
+  auto *scrollArea = new QScrollArea(propDock);
+  scrollArea->setWidgetResizable(true);
+
+  auto *propWidget = new QWidget(scrollArea);
   m_propsLayout = new QFormLayout(propWidget);
   propWidget->setLayout(m_propsLayout);
 
-  propDock->setWidget(propWidget);
+  scrollArea->setWidget(propWidget);
+  propDock->setWidget(scrollArea);
   propDock->setMinimumHeight(400);
   addDockWidget(Qt::RightDockWidgetArea, propDock);
 }
@@ -459,63 +464,228 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
             m_canvas->update();
           }
         });
-    form->addRow("Stroke W", swSB);
+    form->addRow("Stroke W", swSB);
     m_propsLayout->addRow(grp);
   }
 
-  // =========================== Animation ===============================
-  if (e.has<AnimationComponent>()) {
-    auto &ac = e.get<AnimationComponent>();
-    auto *grp = new QGroupBox(tr("Animation"));
-    auto *form = new QFormLayout(grp);
-    auto *entrySB = makeSpinBox<QDoubleSpinBox>(
-        this, 0, 1000, 0.1, [ac] { return ac.entryTime; },
-        [this, e](double v) {
-          e.get_mut<AnimationComponent>().entryTime = v;
-          m_canvas->update();
-        });
-    auto *exitSB = makeSpinBox<QDoubleSpinBox>(
-        this, 0, 1000, 0.1, [ac] { return ac.exitTime; },
-        [this, e](double v) {
-          e.get_mut<AnimationComponent>().exitTime = v;
-          m_canvas->update();
-        });
-    form->addRow("Entry", entrySB);
-    form->addRow("Exit", exitSB);
-    m_propsLayout->addRow(grp);
-  }
+  buildAttachableComponentEditor<AnimationComponent>(
+      e, tr("Animation"), [this, e](QFormLayout *form, AnimationComponent &ac) {
+        auto *entrySB = makeSpinBox<QDoubleSpinBox>(
+            this, 0, 1000, 0.1, [&ac] { return ac.entryTime; },
+            [this, e](double v) {
+              e.get_mut<AnimationComponent>().entryTime = v;
+              m_canvas->update();
+            });
+        auto *exitSB = makeSpinBox<QDoubleSpinBox>(
+            this, 0, 1000, 0.1, [&ac] { return ac.exitTime; },
+            [this, e](double v) {
+              e.get_mut<AnimationComponent>().exitTime = v;
+              m_canvas->update();
+            });
+        form->addRow("Entry", entrySB);
+        form->addRow("Exit", exitSB);
+      });
 
   // ============================= Script ================================
-  if (e.has<ScriptComponent>()) {
-    auto &sc = e.get<ScriptComponent>();
-    auto *grp = new QGroupBox(tr("Script"));
+  buildAttachableComponentEditor<ScriptComponent>(
+      e, tr("Script"), [this, e](QFormLayout *form, ScriptComponent &sc) {
+        // Path
+        {
+          auto *pathWidget = new QWidget();
+          auto *pathLayout = new QHBoxLayout(pathWidget);
+          pathLayout->setContentsMargins(0, 0, 0, 0);
+          pathLayout->setSpacing(4);
+
+          auto *pathEdit = new QLineEdit(QString::fromStdString(sc.scriptPath));
+          pathLayout->addWidget(pathEdit);
+
+          auto *browseBtn = new QPushButton("...");
+          browseBtn->setFixedWidth(
+              browseBtn->fontMetrics().horizontalAdvance("...") + 10);
+          pathLayout->addWidget(browseBtn);
+
+          form->addRow("Path", pathWidget);
+
+          connect(
+              pathEdit, &QLineEdit::editingFinished, this, [this, e, pathEdit] {
+                if (e.has<ScriptComponent>()) {
+                  auto &sc2 = e.get_mut<ScriptComponent>();
+                  std::string newValue = pathEdit->text().toStdString();
+
+                  if (newValue == sc2.scriptPath)
+                    return;
+
+                  QJsonObject oldJson;
+                  oldJson["scriptPath"] =
+                      QString::fromStdString(sc2.scriptPath);
+                  oldJson["startFunction"] =
+                      QString::fromStdString(sc2.startFunction);
+                  oldJson["updateFunction"] =
+                      QString::fromStdString(sc2.updateFunction);
+                  oldJson["destroyFunction"] =
+                      QString::fromStdString(sc2.destroyFunction);
+
+                  sc2.scriptPath = newValue;
+
+                  QJsonObject newJson = oldJson;
+                  newJson["scriptPath"] = QString::fromStdString(newValue);
+
+                  m_undoStack->push(new SetComponentCommand<ScriptComponent>(
+                      this, e, oldJson, newJson));
+                }
+              });
+
+          connect(browseBtn, &QPushButton::clicked, this, [this, e, pathEdit] {
+            QString filePath = QFileDialog::getOpenFileName(
+                this, tr("Open Script"), "../scripts",
+                tr("Lua Files (*.lua);;All Files (*)"));
+            if (!filePath.isEmpty()) {
+              QDir executableDir(QCoreApplication::applicationDirPath());
+              QString relativePath = executableDir.relativeFilePath(filePath);
+              pathEdit->setText(relativePath);
+              if (e.has<ScriptComponent>()) {
+                auto &sc2 = e.get_mut<ScriptComponent>();
+                std::string newValue = relativePath.toStdString();
+                if (newValue != sc2.scriptPath) {
+                  QJsonObject oldJson;
+                  oldJson["scriptPath"] =
+                      QString::fromStdString(sc2.scriptPath);
+                  oldJson["startFunction"] =
+                      QString::fromStdString(sc2.startFunction);
+                  oldJson["updateFunction"] =
+                      QString::fromStdString(sc2.updateFunction);
+                  oldJson["destroyFunction"] =
+                      QString::fromStdString(sc2.destroyFunction);
+
+                  sc2.scriptPath = newValue;
+
+                  QJsonObject newJson = oldJson;
+                  newJson["scriptPath"] = QString::fromStdString(newValue);
+
+                  m_undoStack->push(new SetComponentCommand<ScriptComponent>(
+                      this, e, oldJson, newJson));
+                }
+              }
+            }
+          });
+        }
+
+        // Other fields
+        auto makeEdit = [&](const QString &lbl, const std::string &initial,
+                            auto setter) {
+          auto *le = new QLineEdit(QString::fromStdString(initial));
+          form->addRow(lbl, le);
+          connect(
+              le, &QLineEdit::editingFinished, this,
+              [this, e, setter, le, lbl] {
+                if (e.has<ScriptComponent>()) {
+                  auto &sc2 = e.get_mut<ScriptComponent>();
+                  std::string newValue = le->text().toStdString();
+
+                  if ((lbl == "Start" && newValue == sc2.startFunction) ||
+                      (lbl == "Update" && newValue == sc2.updateFunction) ||
+                      (lbl == "Destroy" && newValue == sc2.destroyFunction)) {
+                    return;
+                  }
+
+                  QJsonObject oldJson;
+                  oldJson["scriptPath"] =
+                      QString::fromStdString(sc2.scriptPath);
+                  oldJson["startFunction"] =
+                      QString::fromStdString(sc2.startFunction);
+                  oldJson["updateFunction"] =
+                      QString::fromStdString(sc2.updateFunction);
+                  oldJson["destroyFunction"] =
+                      QString::fromStdString(sc2.destroyFunction);
+
+                  setter(sc2, newValue);
+
+                  QJsonObject newJson = oldJson;
+                  if (lbl == "Start")
+                    newJson["startFunction"] = QString::fromStdString(newValue);
+                  else if (lbl == "Update")
+                    newJson["updateFunction"] =
+                        QString::fromStdString(newValue);
+                  else if (lbl == "Destroy")
+                    newJson["destroyFunction"] =
+                        QString::fromStdString(newValue);
+
+                  m_undoStack->push(new SetComponentCommand<ScriptComponent>(
+                      this, e, oldJson, newJson));
+                }
+              });
+        };
+
+        makeEdit("Start", sc.startFunction,
+                 [](auto &s, const std::string &v) { s.startFunction = v; });
+        makeEdit("Update", sc.updateFunction,
+                 [](auto &s, const std::string &v) { s.updateFunction = v; });
+        makeEdit("Destroy", sc.destroyFunction,
+                 [](auto &s, const std::string &v) { s.destroyFunction = v; });
+      });
+
+  // Add Component button
+  auto *addComponentBtn = new QPushButton(tr("Add Component"));
+  auto *addComponentMenu = new QMenu(addComponentBtn);
+  addComponentBtn->setMenu(addComponentMenu);
+
+  if (!e.has<AnimationComponent>()) {
+    QAction *addAnimationAction = addComponentMenu->addAction(tr("Animation"));
+    connect(addAnimationAction, &QAction::triggered, this, [this, e] {
+      AnimationComponent defaultInstance;
+      QJsonObject newJson;
+      newJson["entryTime"] = defaultInstance.entryTime;
+      newJson["exitTime"] = defaultInstance.exitTime;
+      m_undoStack->push(new SetComponentCommand<AnimationComponent>(
+          this, e, QJsonObject(), newJson));
+    });
+  }
+
+  if (!e.has<ScriptComponent>()) {
+    QAction *addScriptAction = addComponentMenu->addAction(tr("Script"));
+    connect(addScriptAction, &QAction::triggered, this, [this, e] {
+      ScriptComponent defaultInstance;
+      QJsonObject newJson;
+      newJson["scriptPath"] =
+          QString::fromStdString(defaultInstance.scriptPath);
+      newJson["startFunction"] =
+          QString::fromStdString(defaultInstance.startFunction);
+      newJson["updateFunction"] =
+          QString::fromStdString(defaultInstance.updateFunction);
+      newJson["destroyFunction"] =
+          QString::fromStdString(defaultInstance.destroyFunction);
+      m_undoStack->push(new SetComponentCommand<ScriptComponent>(
+          this, e, QJsonObject(), newJson));
+    });
+  }
+
+  if (addComponentMenu->actions().isEmpty()) {
+    addComponentBtn->hide();
+  }
+
+  m_propsLayout->addRow(addComponentBtn);
+}
+
+template <typename T>
+void MainWindow::buildAttachableComponentEditor(
+    Entity e, const QString &groupName,
+    std::function<void(QFormLayout *, T &)> editorBuilder) {
+  if (e.has<T>()) {
+    auto *grp = new QGroupBox(groupName);
     auto *form = new QFormLayout(grp);
 
-    auto makeEdit = [&](const QString &lbl, const std::string &initial,
-                        auto setter) {
-      auto *le = new QLineEdit(QString::fromStdString(initial));
-      form->addRow(lbl, le);
-      connect(le, &QLineEdit::textEdited, this, [this, e, setter, le] {
-        if (e.has<ScriptComponent>()) {
-          auto &sc2 = e.get_mut<ScriptComponent>();
-          auto old = sc2;
-          setter(sc2, le->text().toStdString());
-          m_undoStack->push(new ChangeScriptCommand(
-              this, e, old.scriptPath, old.startFunction, old.updateFunction,
-              old.destroyFunction, sc2.scriptPath, sc2.startFunction,
-              sc2.updateFunction, sc2.destroyFunction));
-        }
-      });
-    };
+    editorBuilder(form, e.get_mut<T>());
 
-    makeEdit("Path", sc.scriptPath,
-             [](auto s, const std::string &v) { s.scriptPath = v; });
-    makeEdit("Start", sc.startFunction,
-             [](auto s, const std::string &v) { s.startFunction = v; });
-    makeEdit("Update", sc.updateFunction,
-             [](auto s, const std::string &v) { s.updateFunction = v; });
-    makeEdit("Destroy", sc.destroyFunction,
-             [](auto s, const std::string &v) { s.destroyFunction = v; });
+    auto *removeBtn = new QPushButton(tr("Remove Component"));
+    connect(removeBtn, &QPushButton::clicked, this, [this, e] {
+      QJsonObject oldJson = serializeEntity(m_canvas->scene(), e)
+                                .value(SceneCommand::getComponentJsonKey<T>())
+                                .toObject();
+      m_undoStack->push(
+          new SetComponentCommand<T>(this, e, oldJson, QJsonObject()));
+    });
+    form->addRow(removeBtn);
+
     m_propsLayout->addRow(grp);
   }
 }
@@ -527,11 +697,7 @@ void MainWindow::onNewFile() {
   m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
 
   // Create bouncing ball entity
-  Entity circleEntity = m_canvas->scene().createShape("Circle", 100, 100);
-  if (circleEntity.has<ScriptComponent>()) {
-    auto &scr = circleEntity.get_mut<ScriptComponent>();
-    scr.scriptPath = "../scripts/bouncing_ball.lua";
-  }
+  m_canvas->scene().createShape("Circle", 100, 100);
 
   m_sceneModel->refresh();
   m_canvas->update();
@@ -719,12 +885,19 @@ void MainWindow::onStopResetButtonClicked() {
   m_currentTime = 0.f;
   m_canvas->setSelectedEntities({});
 
-  resetScene();
+  if (!m_preSimulationState.isEmpty()) {
+    m_canvas->scene().deserialize(m_preSimulationState);
+    m_preSimulationState = QJsonObject(); // Clear the state
+  }
 
   m_canvas->setCurrentTime(m_currentTime);
   m_canvas->update();
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
+  m_sceneModel->refresh();
+  if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty())
+    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                            QItemSelection());
 }
 
 void MainWindow::onAnimationTimerTimeout() {
@@ -733,7 +906,9 @@ void MainWindow::onAnimationTimerTimeout() {
     m_currentTime = 0.f;
     m_canvas->setSelectedEntities({});
     onSceneSelectionChanged({}, {});
-    resetScene();
+    if (!m_preSimulationState.isEmpty()) {
+      m_canvas->scene().deserialize(m_preSimulationState);
+    }
   }
 
   m_canvas->setCurrentTime(m_currentTime);
@@ -755,9 +930,14 @@ void MainWindow::onTimelineSliderMoved(int value) {
 
 void MainWindow::onPlayPauseButtonClicked() {
   if (m_isPlaying) {
+    // Pause
     m_animationTimer->stop();
     m_playPauseButton->setText("Play");
   } else {
+    // Play
+    if (m_preSimulationState.isEmpty()) {
+      m_preSimulationState = m_canvas->scene().serialize();
+    }
     m_animationTimer->start();
     m_playPauseButton->setText("Pause");
   }
@@ -779,5 +959,12 @@ void MainWindow::syncTransformEditors(Entity e) {
     upd("rot", tr.rotation * 180.0 / M_PI);
     upd("sx", tr.sx);
     upd("sy", tr.sy);
+  }
+}
+
+void MainWindow::refreshProperties() {
+  if (m_sceneTree->selectionModel()->hasSelection()) {
+    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                            QItemSelection());
   }
 }

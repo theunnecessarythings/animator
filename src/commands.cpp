@@ -7,6 +7,14 @@
 // HELPERS
 // =========================================================================
 
+template <>
+const char *SceneCommand::getComponentJsonKey<AnimationComponent>() {
+  return "AnimationComponent";
+}
+template <> const char *SceneCommand::getComponentJsonKey<ScriptComponent>() {
+  return "ScriptComponent";
+}
+
 static inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
   return serializeEntity(scene, e);
 }

@@ -71,21 +71,11 @@ struct TransformComponent {
   float sx = 1.f, sy = 1.f; // scale
 };
 
-#include "shapes.h"
-
+class Shape;
 struct ShapeComponent {
   std::unique_ptr<Shape> shape;
   ShapeComponent() = default;
   ShapeComponent(std::unique_ptr<Shape> s) : shape(std::move(s)) {}
   ShapeComponent(ShapeComponent &&) noexcept = default;
   ShapeComponent &operator=(ShapeComponent &&) noexcept = default;
-  ShapeComponent(const ShapeComponent &other) {
-    if (other.shape)
-      shape = other.shape->clone();
-  }
-  ShapeComponent &operator=(const ShapeComponent &other) {
-    if (this != &other)
-      shape = other.shape ? other.shape->clone() : nullptr;
-    return *this;
-  }
 };

@@ -1,5 +1,6 @@
 #pragma once
 #include "scene.h"
+#include "shapes.h"
 
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
@@ -177,7 +178,7 @@ protected:
           if (ent.has<SceneBackgroundComponent>())
             return;
           if (ent.has<ShapeComponent>()) {
-            auto sc = ent.get<ShapeComponent>();
+            auto &sc = ent.get<ShapeComponent>();
             SkRect originalBounds = sc.shape->getBoundingBox();
             SkMatrix m;
             m.setTranslate(tr.x, tr.y);
@@ -197,7 +198,7 @@ protected:
       if (sel.is_alive() && sel.has<TransformComponent>()) {
         auto tc = sel.get<TransformComponent>();
         if (sel.has<ShapeComponent>()) {
-          auto sc = sel.get<ShapeComponent>();
+          auto &sc = sel.get<ShapeComponent>();
           if (!sc.shape)
             return; // Skip if shape is not valid
           SkRect bb = sc.shape->getBoundingBox();
@@ -310,7 +311,7 @@ protected:
             if (ent.has<SceneBackgroundComponent>())
               return;
             if (ent.has<ShapeComponent>()) {
-              auto sc = ent.get<ShapeComponent>();
+              auto &sc = ent.get<ShapeComponent>();
               if (!sc.shape)
                 return; // Skip if shape is not valid
 
@@ -362,7 +363,7 @@ protected:
         auto tc = e.get<TransformComponent>();
         SkRect bb;
         if (e.has<ShapeComponent>()) {
-          auto sc = e.get<ShapeComponent>();
+          auto &sc = e.get<ShapeComponent>();
           if (sc.shape)
             bb = sc.shape->getBoundingBox();
         }

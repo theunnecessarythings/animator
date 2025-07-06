@@ -9,7 +9,7 @@
  * Serialize a single entity (and all its runtime components) into the same
  * JSON structure the editor uses for copy/paste and file save.
  */
-inline QJsonObject serializeEntity(const Scene &scene, Entity e) {
+inline QJsonObject serializeEntity(const Scene &, Entity e) {
   QJsonObject o;
 
   // Name ------------------------------------------------------------------

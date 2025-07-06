@@ -50,7 +50,7 @@ public:
 
     case ShapePropertiesRole:
       if (e.has<ShapeComponent>()) {
-        auto sc = e.get<ShapeComponent>();
+        auto &sc = e.get<ShapeComponent>();
         if (sc.shape)
           return sc.shape->serialize();
       }

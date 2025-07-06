@@ -3,6 +3,7 @@
 #include "ecs.h"
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFileInfo>
 #include <QString>
 #include <sol/sol.hpp>
 
@@ -38,11 +39,11 @@ public:
 
     // Minimal “registry” proxy (just the world itself)
     auto reg_type = lua_.new_usertype<flecs::world>("Registry");
-    reg_type["get_transform"] = [](flecs::world &self,
+    reg_type["get_transform"] = [](flecs::world &,
                                    Entity e) -> TransformComponent & {
       return e.get_mut<TransformComponent>();
     };
-    reg_type["get_material"] = [](flecs::world &self,
+    reg_type["get_material"] = [](flecs::world &,
                                   Entity e) -> MaterialComponent & {
       return e.get_mut<MaterialComponent>();
     };
@@ -51,15 +52,29 @@ public:
   }
 
   sol::table loadScript(const std::string &path, Entity e) {
+    if (path.empty() || QFileInfo(QString::fromStdString(path)).isDir()) {
+      return sol::nil;
+    }
     try {
       sol::environment env(lua_, sol::create, lua_.globals());
       env["entity_id"] = e;
       env["registry"] = std::ref(world_);
       env["print"] = lua_["print"];
 
-      QString abs = QCoreApplication::applicationDirPath() + "/" +
-                    QString::fromStdString(path);
-      lua_.script_file(abs.toStdString(), env);
+      QFileInfo fileInfo(QString::fromStdString(path));
+      QString scriptPath;
+      if (fileInfo.isAbsolute()) {
+        scriptPath = fileInfo.absoluteFilePath();
+      } else {
+        scriptPath = QCoreApplication::applicationDirPath() + "/" + QString::fromStdString(path);
+      }
+
+      if (!QFileInfo::exists(scriptPath) || QFileInfo(scriptPath).isDir()) {
+        qWarning() << "Script path is invalid or a directory:" << scriptPath;
+        return sol::nil;
+      }
+
+      lua_.script_file(scriptPath.toStdString(), env);
       return env;
     } catch (const sol::error &er) {
       qWarning() << "Lua load error:" << er.what();
@@ -95,7 +110,7 @@ public:
   ScriptSystem(flecs::world &w, ScriptingEngine &se) : world_(w), engine_(se) {
     world_.observer<ScriptComponent>()
         .event(flecs::OnRemove)
-        .each([this](flecs::entity e, ScriptComponent &sc) {
+        .each([this](flecs::entity, ScriptComponent &sc) {
           if (sc.scriptEnv.valid()) {
             this->engine_.call(sc.scriptEnv, sc.destroyFunction);
             sc.scriptEnv = sol::nil; // Invalidate the Lua table

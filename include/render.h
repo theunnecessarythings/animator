@@ -1,5 +1,6 @@
 #pragma once
 #include "ecs.h"
+#include "shapes.h"
 
 class RenderSystem {
 public:

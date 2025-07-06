@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "ecs.h"
@@ -17,8 +16,6 @@
 #include <cmath>
 #include <functional>
 #include <memory>
-
-class MainWindow;
 
 //==============================================================================
 // Shape Base Class (Interface)
