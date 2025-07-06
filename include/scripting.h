@@ -14,6 +14,15 @@ public:
   explicit ScriptingEngine(flecs::world &w) : lua_(), world_(w) {
     lua_.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
 
+    // Redirect Lua's print to qDebug
+    lua_.set_function("print", [](sol::variadic_args args, sol::this_state s) {
+      sol::state_view lua(s);
+      QStringList messages;
+      for (auto a : args) {
+        messages << QString::fromStdString(a.as<std::string>());
+      }
+    });
+
     // Expose C++ components to Lua
     lua_.new_usertype<TransformComponent>(
         "TransformComponent", "x", &TransformComponent::x, "y",
@@ -29,10 +38,12 @@ public:
 
     // Minimal “registry” proxy (just the world itself)
     auto reg_type = lua_.new_usertype<flecs::world>("Registry");
-    reg_type["get_transform"] = [](flecs::world &self, Entity e) {
+    reg_type["get_transform"] = [](flecs::world &self,
+                                   Entity e) -> TransformComponent & {
       return e.get_mut<TransformComponent>();
     };
-    reg_type["get_material"] = [](flecs::world &self, Entity e) {
+    reg_type["get_material"] = [](flecs::world &self,
+                                  Entity e) -> MaterialComponent & {
       return e.get_mut<MaterialComponent>();
     };
 
@@ -44,6 +55,7 @@ public:
       sol::environment env(lua_, sol::create, lua_.globals());
       env["entity_id"] = e;
       env["registry"] = std::ref(world_);
+      env["print"] = lua_["print"];
 
       QString abs = QCoreApplication::applicationDirPath() + "/" +
                     QString::fromStdString(path);
@@ -58,11 +70,15 @@ public:
   void call(sol::table &env, const std::string &fn, float dt = 0.f,
             float t = 0.f) {
     if (env.valid() && env[fn].valid()) {
-      try {
-        env[fn](env["entity_id"].get<Entity>(), std::ref(world_), dt, t);
-      } catch (const sol::error &er) {
-        qWarning() << "Lua error in" << fn.c_str() << ":" << er.what();
+      sol::protected_function func = env[fn];
+      sol::protected_function_result result =
+          func(env["entity_id"].get<Entity>(), std::ref(world_), dt, t);
+      if (!result.valid()) {
+        sol::error err = result;
+        qWarning() << "Lua error in" << fn.c_str() << ":" << err.what();
       }
+    } else {
+      qWarning() << "Lua function" << fn.c_str() << "not found in script";
     }
   }
 
@@ -72,20 +88,47 @@ private:
 };
 
 // ----------------------------------------------------------------------------
-//  ScriptSystem – call this from your main loop
+//  ScriptSystem
 // ----------------------------------------------------------------------------
 class ScriptSystem {
 public:
-  ScriptSystem(flecs::world &w, ScriptingEngine &se) : world_(w), engine_(se) {}
+  ScriptSystem(flecs::world &w, ScriptingEngine &se) : world_(w), engine_(se) {
+    world_.observer<ScriptComponent>()
+        .event(flecs::OnRemove)
+        .each([this](flecs::entity e, ScriptComponent &sc) {
+          if (sc.scriptEnv.valid()) {
+            this->engine_.call(sc.scriptEnv, sc.destroyFunction);
+            sc.scriptEnv = sol::nil; // Invalidate the Lua table
+          }
+        });
+  }
 
   void tick(float dt, float currentTime) {
     world_.each<ScriptComponent>([&](flecs::entity e, ScriptComponent &sc) {
       // Lazy-load script
       if (!sc.scriptEnv.valid()) {
+        qDebug() << "Script environment not valid for entity" << e.id()
+                 << ", loading script:" << sc.scriptPath.c_str();
         sc.scriptEnv = engine_.loadScript(sc.scriptPath, e);
-        engine_.call(sc.scriptEnv, sc.startFunction);
+        if (sc.scriptEnv.valid()) {
+          engine_.call(sc.scriptEnv, sc.startFunction);
+        } else {
+          qWarning() << "Failed to load script for entity" << e.id() << ":"
+                     << sc.scriptPath.c_str();
+        }
       }
-      engine_.call(sc.scriptEnv, sc.updateFunction, dt, currentTime);
+
+      if (sc.scriptEnv.valid()) {
+        if (sc.scriptEnv[sc.updateFunction].valid()) {
+          engine_.call(sc.scriptEnv, sc.updateFunction, dt, currentTime);
+        } else {
+          qWarning() << "Update function '" << sc.updateFunction.c_str()
+                     << "' not found in script for entity" << e.id();
+        }
+      } else {
+        qWarning() << "Script environment invalid for update call for entity"
+                   << e.id();
+      }
     });
   }
 

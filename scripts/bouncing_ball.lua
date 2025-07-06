@@ -7,7 +7,7 @@ local bounce_factor = 0.8 -- How much velocity is retained after a bounce
 local floor_y = 400 -- The 'ground' level
 
 function on_start(entity_id, registry)
-    print("Bouncing ball script started for entity " .. entity_id)
+    print("Bouncing ball script started for entity " .. tostring(entity_id))
     local transform = registry:get_transform(entity_id)
     if transform then
         initial_y = transform.y
@@ -41,11 +41,13 @@ function on_update(entity_id, registry, dt, currentTime)
             local b = math.floor(math.sin(currentTime * 2 + math.pi) * 127 + 128)
             material.color = (r << 24) + (g << 16) + (b << 8) + 0xFF -- RGBA
         else
-            print("No material found for entity " .. entity_id)
+            print("No material found for entity " .. tostring(entity_id))
         end
+    else
+        print("No transform found for entity " .. tostring(entity_id))
     end
 end
 
 function on_destroy(entity_id, registry)
-    print("Bouncing ball script destroyed for entity " .. entity_id)
+    print("Bouncing ball script destroyed for entity " .. tostring(entity_id))
 end
