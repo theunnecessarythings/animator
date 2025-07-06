@@ -19,8 +19,10 @@ int main(int argc, char **argv) {
   // Build default scene -----------------------------------------------------
   w.canvas()->scene().createBackground(w.width(), w.height());
   Entity circleEntity = w.canvas()->scene().createShape("Circle", 100, 100);
-  if (auto *script = w.canvas()->scene().reg.get<ScriptComponent>(circleEntity))
-    script->scriptPath = "../scripts/bouncing_ball.lua";
+  if (circleEntity.has<ScriptComponent>()) {
+    auto &scr = circleEntity.get_mut<ScriptComponent>();
+    scr.scriptPath = "../scripts/bouncing_ball.lua";
+  }
 
   w.sceneModel()->refresh();
 

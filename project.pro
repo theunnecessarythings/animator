@@ -25,7 +25,7 @@ LIBS += $$SKIA_ROOT/out/Static/libskia.a \
         /home/sreeraj/ubuntu/Documents/animator/lua-5.4.8/src/liblua.a
 SOURCES       += src/main.cpp src/commands.cpp src/window.cpp src/shapes.cpp flecs/flecs.c
 HEADERS       += include/canvas.h include/window.h include/toolbox.h include/ecs.h include/scene_model.h include/commands.h \
-                include/serialization.h include/render.h include/shapes.h
+                include/serialization.h include/render.h include/shapes.h include/scripting.h include/scene.h
 RESOURCES     += resources/icons.qrc
 
 QMAKE_CXX = clang++
