@@ -42,3 +42,10 @@ void LineShape::rebuildPath() const {
   m_path.moveTo(x1, y1);
   m_path.lineTo(x2, y2);
 }
+
+void ArcShape::rebuildPath() const {
+  m_path.reset();
+  m_path.addArc(SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
+                                 2 * radius, 2 * radius),
+                 start_angle, angle);
+}

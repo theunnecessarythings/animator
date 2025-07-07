@@ -16,6 +16,7 @@ public:
     addTool("Circle", QIcon(":/icons/circle.svg"), "Circle");
     addTool("Regular Polygram", QIcon(":/icons/circle.svg"), "RegularPolygram");
     addTool("Line", QIcon(":/icons/line.svg"), "Line");
+    addTool("Arc", QIcon(":/icons/arc.svg"), "Arc");
   }
 
 protected:

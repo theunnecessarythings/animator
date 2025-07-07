@@ -159,6 +159,15 @@ DEFINE_SHAPE_CLASS(RegularPolygramShape, "RegularPolygram",
   P(float, y2, "Y2", 0.0f)
 DEFINE_SHAPE_CLASS(LineShape, "Line", LINE_PROPERTIES)
 
+#define ARC_PROPERTIES(P)                                                      \
+  P(float, radius, "Radius", 50.0f)                                            \
+  P(float, start_angle, "Start Angle", 0.0f)                                   \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(int, num_components, "Num Components", 16)                                 \
+  P(float, arc_center_x, "Center X", 0.0f)                                     \
+  P(float, arc_center_y, "Center Y", 0.0f)
+DEFINE_SHAPE_CLASS(ArcShape, "Arc", ARC_PROPERTIES)
+
 namespace ShapeFactory {
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
@@ -169,6 +178,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<RegularPolygramShape>();
   if (kind == "Line")
     return std::make_unique<LineShape>();
+  if (kind == "Arc")
+    return std::make_unique<ArcShape>();
   return nullptr;
 }
 } // namespace ShapeFactory
