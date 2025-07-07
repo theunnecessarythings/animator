@@ -10,5 +10,6 @@
     <file>icons/arc.svg</file>
     <file>icons/arc_between_points.svg</file>
     <file>icons/curved_arrow.svg</file>
+    <file>icons/curved_double_arrow.svg</file>
   </qresource>
 </RCC>

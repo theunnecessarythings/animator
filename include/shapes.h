@@ -16,36 +16,79 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <vector>
 
 //==============================================================================
 // Shape Base Class (Interface)
 //==============================================================================
+
+// Defines how a path should be styled (filled, stroked, or both)
+enum class PathStyle { kFill, kStroke, kStrokeAndFill };
+
+// A simple struct to pair a path with its intended style
+struct StyledPath {
+  SkPath path;
+  PathStyle style = PathStyle::kStrokeAndFill;
+};
+
 class Shape {
 public:
   virtual ~Shape() = default;
 
   void render(SkCanvas *canvas, const MaterialComponent &material,
               const PathEffectComponent *pathEffect = nullptr) const {
-    SkPaint paint;
-    paint.setAntiAlias(material.antiAliased);
-    paint.setColor(material.color);
-    if (material.isFilled && material.isStroked) {
-      paint.setStyle(SkPaint::kStrokeAndFill_Style);
-    } else if (material.isFilled) {
-      paint.setStyle(SkPaint::kFill_Style);
-    } else if (material.isStroked) {
-      paint.setStyle(SkPaint::kStroke_Style);
-    }
-    paint.setStrokeWidth(material.strokeWidth);
-
-    if (pathEffect) {
-      paint.setPathEffect(pathEffect->makePathEffect());
+    if (m_isDirty) {
+      rebuildPaths();
+      m_isDirty = false;
     }
 
-    canvas->drawPath(getPath(), paint);
+    for (const auto &styledPath : m_paths) {
+      SkPaint paint;
+      paint.setAntiAlias(material.antiAliased);
+      paint.setColor(material.color);
+      paint.setStrokeWidth(material.strokeWidth);
+
+      if (pathEffect) {
+        paint.setPathEffect(pathEffect->makePathEffect());
+      }
+
+      switch (styledPath.style) {
+      case PathStyle::kFill:
+        paint.setStyle(SkPaint::kFill_Style);
+        break;
+      case PathStyle::kStroke:
+        paint.setStyle(SkPaint::kStroke_Style);
+        break;
+      case PathStyle::kStrokeAndFill:
+        paint.setStyle(SkPaint::kStrokeAndFill_Style);
+        break;
+      }
+
+      // Override with material properties if they are more restrictive
+      if (!material.isFilled && (styledPath.style == PathStyle::kFill ||
+                                  styledPath.style == PathStyle::kStrokeAndFill)) {
+        // If material says no fill, don't fill
+      } else if (!material.isStroked &&
+                 (styledPath.style == PathStyle::kStroke ||
+                  styledPath.style == PathStyle::kStrokeAndFill)) {
+        // If material says no stroke, don't stroke
+      } else {
+        canvas->drawPath(styledPath.path, paint);
+      }
+    }
   }
 
-  SkRect getBoundingBox() const { return getPath().getBounds(); }
+  SkRect getBoundingBox() const {
+    if (m_isDirty) {
+      rebuildPaths();
+      m_isDirty = false;
+    }
+    SkRect bounds = m_paths.empty() ? SkRect::MakeEmpty() : m_paths[0].path.getBounds();
+    for (size_t i = 1; i < m_paths.size(); ++i) {
+      bounds.join(m_paths[i].path.getBounds());
+    }
+    return bounds;
+  }
 
   virtual const char *getKindName() const = 0;
   virtual QWidget *
@@ -54,10 +97,9 @@ public:
   virtual QJsonObject serialize() const = 0;
   virtual void deserialize(const QJsonObject &props) = 0;
   virtual std::unique_ptr<Shape> clone() const = 0;
+  virtual void rebuildPaths() const = 0;
 
 protected:
-  virtual void rebuildPath() const = 0;
-
   void addNumericProperty(QFormLayout *layout, QWidget *parent,
                           const char *label, double value,
                           std::function<void(double)> onValueChanged) {
@@ -73,13 +115,15 @@ protected:
 
   const SkPath &getPath() const {
     if (m_isDirty) {
-      rebuildPath();
+      rebuildPaths();
       m_isDirty = false;
     }
-    return m_path;
+    // Return the first path for simple compatibility, though this might not
+    // always be what's needed.
+    return m_paths.front().path;
   }
 
-  mutable SkPath m_path;
+  mutable std::vector<StyledPath> m_paths;
   mutable bool m_isDirty = true;
 };
 
@@ -128,9 +172,9 @@ protected:
       PROPERTIES_MACRO(DESERIALIZE_PROPERTY)                                   \
       markDirty();                                                             \
     }                                                                          \
+    void rebuildPaths() const override;                                        \
                                                                                \
   protected:                                                                   \
-    void rebuildPath() const override;                                         \
     void markDirty() { m_isDirty = true; }                                     \
                                                                                \
   private:                                                                     \
@@ -168,23 +212,36 @@ DEFINE_SHAPE_CLASS(LineShape, "Line", LINE_PROPERTIES)
   P(float, arc_center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(ArcShape, "Arc", ARC_PROPERTIES)
 
-#define ARC_BETWEEN_POINTS_PROPERTIES(P) \
-  P(float, x1, "X1", -50.0f) \
-  P(float, y1, "Y1", 0.0f) \
-  P(float, x2, "X2", 50.0f) \
-  P(float, y2, "Y2", 0.0f) \
-  P(float, angle, "Angle", 90.0f) \
+#define ARC_BETWEEN_POINTS_PROPERTIES(P)                                       \
+  P(float, x1, "X1", -50.0f)                                                   \
+  P(float, y1, "Y1", 0.0f)                                                     \
+  P(float, x2, "X2", 50.0f)                                                    \
+  P(float, y2, "Y2", 0.0f)                                                     \
+  P(float, angle, "Angle", 90.0f)                                              \
   P(float, radius, "Radius", 0.0f) /* 0.0 means auto-calculate */
-DEFINE_SHAPE_CLASS(ArcBetweenPointsShape, "ArcBetweenPoints", ARC_BETWEEN_POINTS_PROPERTIES)
+DEFINE_SHAPE_CLASS(ArcBetweenPointsShape, "ArcBetweenPoints",
+                   ARC_BETWEEN_POINTS_PROPERTIES)
 
-#define CURVED_ARROW_PROPERTIES(P) \
-  P(float, x1, "X1", -50.0f) \
-  P(float, y1, "Y1", 0.0f) \
-  P(float, x2, "X2", 50.0f) \
-  P(float, y2, "Y2", 0.0f) \
-  P(float, angle, "Angle", 90.0f) \
-  P(float, radius, "Radius", 0.0f) /* 0.0 means auto-calculate */
+#define CURVED_ARROW_PROPERTIES(P)                                             \
+  P(float, x1, "X1", -50.0f)                                                   \
+  P(float, y1, "Y1", 0.0f)                                                     \
+  P(float, x2, "X2", 50.0f)                                                    \
+  P(float, y2, "Y2", 0.0f)                                                     \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(float, radius, "Radius", 0.0f) /* 0.0 means auto-calculate */              \
+  P(float, arrowhead_size, "Arrowhead Size", 10.0f)
 DEFINE_SHAPE_CLASS(CurvedArrowShape, "CurvedArrow", CURVED_ARROW_PROPERTIES)
+
+#define CURVED_DOUBLE_ARROW_PROPERTIES(P)                                      \
+  P(float, x1, "X1", -50.0f)                                                   \
+  P(float, y1, "Y1", 0.0f)                                                     \
+  P(float, x2, "X2", 50.0f)                                                    \
+  P(float, y2, "Y2", 0.0f)                                                     \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(float, radius, "Radius", 0.0f) /* 0.0 means auto-calculate */              \
+  P(float, arrowhead_size, "Arrowhead Size", 10.0f)
+DEFINE_SHAPE_CLASS(CurvedDoubleArrowShape, "CurvedDoubleArrow",
+                   CURVED_DOUBLE_ARROW_PROPERTIES)
 
 namespace ShapeFactory {
 inline std::unique_ptr<Shape> create(const std::string &kind) {
@@ -202,6 +259,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<ArcBetweenPointsShape>();
   if (kind == "CurvedArrow")
     return std::make_unique<CurvedArrowShape>();
+  if (kind == "CurvedDoubleArrow")
+    return std::make_unique<CurvedDoubleArrowShape>();
   return nullptr;
 }
 } // namespace ShapeFactory

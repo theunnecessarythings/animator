@@ -1,17 +1,26 @@
 #include "shapes.h"
+#include "include/core/SkPathMeasure.h"
 
-void RectangleShape::rebuildPath() const {
-  m_path.reset();
-  m_path.addRect(SkRect::MakeWH(width, height), SkPathDirection::kCW, 0);
+// For simple shapes, we create one path that can be stroked and/or filled.
+void RectangleShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.path.addRect(SkRect::MakeWH(width, height), SkPathDirection::kCW, 0);
+  styledPath.style = PathStyle::kStrokeAndFill;
+  m_paths.push_back(styledPath);
 }
 
-void CircleShape::rebuildPath() const {
-  m_path.reset();
-  m_path.addCircle(0, 0, radius, SkPathDirection::kCW);
+void CircleShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.path.addCircle(0, 0, radius, SkPathDirection::kCW);
+  styledPath.style = PathStyle::kStrokeAndFill;
+  m_paths.push_back(styledPath);
 }
 
-SkPath createRegularPolygramPath(SkPath &path, int num_vertices, float radius,
-                                 int density, float start_angle) {
+// Helper for polygram
+SkPath createRegularPolygramPath(int num_vertices, float radius, int density, float start_angle) {
+  SkPath path;
   if (num_vertices < 3 || radius <= 0 || density < 1)
     return path;
 
@@ -32,79 +41,80 @@ SkPath createRegularPolygramPath(SkPath &path, int num_vertices, float radius,
   return path;
 }
 
-void RegularPolygramShape::rebuildPath() const {
-  m_path.reset();
-  createRegularPolygramPath(m_path, num_vertices, radius, density, start_angle);
+void RegularPolygramShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.path = createRegularPolygramPath(num_vertices, radius, density, start_angle);
+  styledPath.style = PathStyle::kStrokeAndFill;
+  m_paths.push_back(styledPath);
 }
 
-void LineShape::rebuildPath() const {
-  m_path.reset();
-  m_path.moveTo(x1, y1);
-  m_path.lineTo(x2, y2);
+// For lines and arcs, we create a single open path.
+// The material will determine if it's stroked. Filling will have no effect.
+void LineShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.path.moveTo(x1, y1);
+  styledPath.path.lineTo(x2, y2);
+  styledPath.style = PathStyle::kStroke;
+  m_paths.push_back(styledPath);
 }
 
-void ArcShape::rebuildPath() const {
-  m_path.reset();
-  m_path.addArc(SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
+void ArcShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.path.addArc(SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
                                  2 * radius, 2 * radius),
                 start_angle, angle);
+  styledPath.style = PathStyle::kStroke;
+  m_paths.push_back(styledPath);
 }
 
-void ArcBetweenPointsShape::rebuildPath() const {
-  m_path.reset();
-
-  SkPoint p1 = SkPoint::Make(x1, y1);
-  SkPoint p2 = SkPoint::Make(x2, y2);
+// Helper function to get parameters for an arc between two points
+bool getArcBetweenPointsParams(float x1, float y1, float x2, float y2,
+                               float angle, float radius, SkPoint &p1,
+                               SkPoint &p2, SkRect &arc_rect,
+                               float &start_angle_degrees,
+                               float &skia_sweep_angle) {
+  p1 = SkPoint::Make(x1, y1);
+  p2 = SkPoint::Make(x2, y2);
 
   float dist = SkPoint::Distance(p1, p2);
-
   float actual_radius = radius;
-  float actual_angle = angle; // This is the desired sweep angle in degrees
+  float actual_angle = angle;
 
-  if (actual_radius == 0.0f) { // Auto-calculate radius based on angle
+  if (actual_radius == 0.0f) {
     if (actual_angle == 0.0f) {
-      m_path.moveTo(x1, y1);
-      m_path.lineTo(x2, y2);
-      return;
+      return false; // Line
     }
-    // Convert angle to radians for trigonometric functions
     float half_angle_rad = (actual_angle / 2.0f) * M_PI / 180.0f;
     actual_radius = (dist / 2.0f) / sin(half_angle_rad);
-  } else { // Radius is provided, calculate angle
+  } else {
     float halfdist = dist / 2.0f;
     if (actual_radius < halfdist) {
-      // Radius is too small to connect the points. Draw a line instead.
-      m_path.moveTo(x1, y1);
-      m_path.lineTo(x2, y2);
-      return;
+      return false; // Line
     }
-    // Calculate the angle based on the provided radius
     float cos_half_angle = (actual_radius - sqrt(actual_radius * actual_radius -
                                                  halfdist * halfdist)) /
                            actual_radius;
     actual_angle = acos(cos_half_angle) * 2.0f * 180.0f / M_PI;
   }
 
-  // Calculate center of the arc
   SkPoint mid_point = SkPoint::Make((x1 + x2) / 2.0f, (y1 + y2) / 2.0f);
   float d_mid_to_center_sq =
       actual_radius * actual_radius - (dist * dist / 4.0f);
+  if (d_mid_to_center_sq < 0)
+    return false; // Line
   float d_mid_to_center = sqrt(d_mid_to_center_sq);
 
   SkVector vec_p1_to_p2 = p2 - p1;
-  SkVector perp_vec =
-      SkVector::Make(-vec_p1_to_p2.fY, vec_p1_to_p2.fX); // Perpendicular vector
+  SkVector perp_vec = SkVector::Make(-vec_p1_to_p2.fY, vec_p1_to_p2.fX);
   perp_vec.normalize();
 
-  // There are two possible centers. We need to choose one based on the sign of
-  // the angle.
   SkPoint center1 = mid_point + perp_vec * d_mid_to_center;
   SkPoint center2 = mid_point - perp_vec * d_mid_to_center;
 
   SkPoint arc_center;
-  float start_angle_degrees;
-
-  // Determine which center to use
   float cross_product1 = (p1.fX - center1.fX) * (p2.fY - center1.fY) -
                          (p1.fY - center1.fY) * (p2.fX - center1.fX);
 
@@ -115,36 +125,132 @@ void ArcBetweenPointsShape::rebuildPath() const {
     arc_center = center2;
   }
 
-  // Calculate start angle in degrees (Skia's convention: 0 at 3 o'clock,
-  // positive clockwise)
   start_angle_degrees =
       atan2(p1.fY - arc_center.fY, p1.fX - arc_center.fX) * 180.0f / M_PI;
-
-  // Adjust start angle to be within [0, 360)
   start_angle_degrees = fmod(start_angle_degrees, 360.0f);
   if (start_angle_degrees < 0) {
     start_angle_degrees += 360.0f;
   }
 
-  // Skia's addArc draws clockwise for positive sweep.
-  // If our actual_angle is positive (counter-clockwise), we need a negative
-  // sweep in Skia. If our actual_angle is negative (clockwise), we need a
-  // positive sweep in Skia.
-  float skia_sweep_angle =
-      -actual_angle; // Invert for Skia's clockwise positive convention
+  skia_sweep_angle = -actual_angle;
 
-  m_path.addArc(SkRect::MakeXYWH(arc_center.fX - actual_radius,
-                                 arc_center.fY - actual_radius,
-                                 2 * actual_radius, 2 * actual_radius),
-                start_angle_degrees, skia_sweep_angle);
+  arc_rect = SkRect::MakeXYWH(arc_center.fX - actual_radius,
+                              arc_center.fY - actual_radius, 2 * actual_radius,
+                              2 * actual_radius);
+  return true;
 }
 
-void CurvedArrowShape::rebuildPath() const {
-  // CurvedArrow is essentially an ArcBetweenPoints with an arrow tip.
-  // The arrow tip is handled by PathEffectComponent in the render method.
-  // So, we can reuse the ArcBetweenPointsShape's path building logic.
-  // For now, we'll just create a line, and the arrow will be added as a path effect.
-  m_path.reset();
-  m_path.moveTo(x1, y1);
-  m_path.lineTo(x2, y2);
+void ArcBetweenPointsShape::rebuildPaths() const {
+    m_paths.clear();
+    StyledPath styledPath;
+    styledPath.style = PathStyle::kStroke;
+
+    SkPoint p1, p2;
+    SkRect arc_rect;
+    float start_angle_deg, sweep_angle_deg;
+    if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
+                                  arc_rect, start_angle_deg, sweep_angle_deg)) {
+        styledPath.path.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
+    } else {
+        styledPath.path.moveTo(x1, y1);
+        styledPath.path.lineTo(x2, y2);
+    }
+    m_paths.push_back(styledPath);
+}
+
+// Helper function to create an arrowhead path
+SkPath createArrowheadPath(const SkPoint &tip_point,
+                           const SkVector &direction_vector, float size) {
+  SkPath path;
+  SkVector dir = direction_vector;
+  dir.normalize();
+  SkVector perp_dir = SkVector::Make(-dir.fY, dir.fX);
+
+  SkPoint base1 = tip_point - dir * size + perp_dir * (size / 2.0f);
+  SkPoint base2 = tip_point - dir * size - perp_dir * (size / 2.0f);
+
+  path.moveTo(tip_point.fX, tip_point.fY);
+  path.lineTo(base1.fX, base1.fY);
+  path.lineTo(base2.fX, base2.fY);
+  path.close();
+  return path;
+}
+
+void CurvedArrowShape::rebuildPaths() const {
+  m_paths.clear();
+
+  // 1. Create the arc path (for stroking)
+  StyledPath arcStyledPath;
+  arcStyledPath.style = PathStyle::kStroke;
+  SkPath &arcPath = arcStyledPath.path;
+
+  SkPoint p1, p2;
+  SkRect arc_rect;
+  float start_angle_deg, sweep_angle_deg;
+  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
+                                arc_rect, start_angle_deg, sweep_angle_deg)) {
+    arcPath.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
+  } else {
+    arcPath.moveTo(x1, y1);
+    arcPath.lineTo(x2, y2);
+  }
+  m_paths.push_back(arcStyledPath);
+
+  // 2. Create the arrowhead path (for filling)
+  SkPathMeasure path_measure(arcPath, false);
+  if (path_measure.getLength() > 0) {
+    SkPoint position;
+    SkVector tangent;
+    if (path_measure.getPosTan(path_measure.getLength(), &position, &tangent)) {
+      if (tangent.length() > 1e-6) {
+        StyledPath arrowheadStyledPath;
+        arrowheadStyledPath.style = PathStyle::kFill;
+        arrowheadStyledPath.path = createArrowheadPath(position, tangent, arrowhead_size);
+        m_paths.push_back(arrowheadStyledPath);
+      }
+    }
+  }
+}
+
+void CurvedDoubleArrowShape::rebuildPaths() const {
+  m_paths.clear();
+
+  // 1. Create the arc path (for stroking)
+  StyledPath arcStyledPath;
+  arcStyledPath.style = PathStyle::kStroke;
+  SkPath &arcPath = arcStyledPath.path;
+
+  SkPoint p1, p2;
+  SkRect arc_rect;
+  float start_angle_deg, sweep_angle_deg;
+  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
+                                arc_rect, start_angle_deg, sweep_angle_deg)) {
+    arcPath.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
+  } else {
+    arcPath.moveTo(x1, y1);
+    arcPath.lineTo(x2, y2);
+  }
+  m_paths.push_back(arcStyledPath);
+
+  // 2. Create arrowhead paths (for filling)
+  SkPathMeasure path_measure(arcPath, false);
+  if (path_measure.getLength() > 0) {
+    SkPoint position_start, position_end;
+    SkVector tangent_start, tangent_end;
+    path_measure.getPosTan(0, &position_start, &tangent_start);
+    path_measure.getPosTan(path_measure.getLength(), &position_end, &tangent_end);
+
+    if (tangent_start.length() > 1e-6) {
+      StyledPath arrowheadStyledPath;
+      arrowheadStyledPath.style = PathStyle::kFill;
+      arrowheadStyledPath.path = createArrowheadPath(position_start, -tangent_start, arrowhead_size);
+      m_paths.push_back(arrowheadStyledPath);
+    }
+    if (tangent_end.length() > 1e-6) {
+      StyledPath arrowheadStyledPath;
+      arrowheadStyledPath.style = PathStyle::kFill;
+      arrowheadStyledPath.path = createArrowheadPath(position_end, tangent_end, arrowhead_size);
+      m_paths.push_back(arrowheadStyledPath);
+    }
+  }
 }

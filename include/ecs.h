@@ -51,7 +51,7 @@ struct NameComponent {
 struct MaterialComponent {
   SkColor color = SK_ColorBLUE;
   bool isFilled = true;
-  bool isStroked = false;
+  bool isStroked = true;
   float strokeWidth = 1.f;
   bool antiAliased = true;
 };
@@ -87,7 +87,9 @@ struct PathEffectComponent {
     switch (type) {
     case Type::Dash:
       if (dashIntervals.size() >= 2 && (dashIntervals.size() % 2 == 0)) {
-        return SkDashPathEffect::Make(SkSpan<const SkScalar>(dashIntervals.data(), dashIntervals.size()), dashPhase);
+        return SkDashPathEffect::Make(
+            SkSpan<const SkScalar>(dashIntervals.data(), dashIntervals.size()),
+            dashPhase);
       }
       break;
     case Type::Corner:
