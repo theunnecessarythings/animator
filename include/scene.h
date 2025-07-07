@@ -26,8 +26,6 @@ public:
     e.set<TransformComponent>({x, y});
     e.set<ShapeComponent>(ShapeFactory::create(kind));
     e.set<MaterialComponent>({});
-    e.set<AnimationComponent>({});
-    e.set<ScriptComponent>({});
 
     std::string name = uniqueName(kind);
     e.set<NameComponent>({name});

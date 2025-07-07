@@ -32,7 +32,11 @@ public:
         canvas->translate(tr.x, tr.y);
         canvas->rotate(tr.rotation * 180.f / M_PI);
         canvas->scale(tr.sx, tr.sy);
-        shapeCmp.shape->render(canvas, mat);
+        const PathEffectComponent *pathEffect = nullptr;
+        if (e.has<PathEffectComponent>()) {
+          pathEffect = &e.get<PathEffectComponent>();
+        }
+        shapeCmp.shape->render(canvas, mat, pathEffect);
         canvas->restore();
       }
     };

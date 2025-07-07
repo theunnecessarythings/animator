@@ -11,6 +11,10 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include "include/core/SkPathEffect.h"
+#include "include/effects/SkCornerPathEffect.h"
+#include "include/effects/SkDashPathEffect.h"
+#include "include/effects/SkDiscretePathEffect.h"
 
 #include <QJsonObject>
 #include <QMetaObject>
@@ -19,6 +23,7 @@
 #include <sol/sol.hpp>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Basic aliases & helpers
@@ -61,6 +66,40 @@ struct ScriptComponent {
   std::string updateFunction = "on_update";
   std::string destroyFunction = "on_destroy";
   sol::table scriptEnv; // each script gets its own Lua env
+};
+
+struct PathEffectComponent {
+  enum class Type { None, Dash, Corner, Discrete };
+  Type type = Type::None;
+
+  // for Dash
+  std::vector<float> dashIntervals = {10.f, 5.f};
+  float dashPhase = 0.f;
+
+  // for Corner
+  float cornerRadius = 5.f;
+
+  // for Discrete
+  float discreteLength = 10.f;
+  float discreteDeviation = 5.f;
+
+  sk_sp<SkPathEffect> makePathEffect() const {
+    switch (type) {
+    case Type::Dash:
+      if (dashIntervals.size() >= 2 && (dashIntervals.size() % 2 == 0)) {
+        return SkDashPathEffect::Make(SkSpan<const SkScalar>(dashIntervals.data(), dashIntervals.size()), dashPhase);
+      }
+      break;
+    case Type::Corner:
+      return SkCornerPathEffect::Make(cornerRadius);
+    case Type::Discrete:
+      return SkDiscretePathEffect::Make(discreteLength, discreteDeviation, 0);
+    case Type::None:
+    default:
+      return nullptr;
+    }
+    return nullptr;
+  }
 };
 
 struct SceneBackgroundComponent {}; // tag

@@ -24,7 +24,8 @@ class Shape {
 public:
   virtual ~Shape() = default;
 
-  void render(SkCanvas *canvas, const MaterialComponent &material) const {
+  void render(SkCanvas *canvas, const MaterialComponent &material,
+              const PathEffectComponent *pathEffect = nullptr) const {
     SkPaint paint;
     paint.setAntiAlias(material.antiAliased);
     paint.setColor(material.color);
@@ -36,6 +37,10 @@ public:
       paint.setStyle(SkPaint::kStroke_Style);
     }
     paint.setStrokeWidth(material.strokeWidth);
+
+    if (pathEffect) {
+      paint.setPathEffect(pathEffect->makePathEffect());
+    }
 
     canvas->drawPath(getPath(), paint);
   }

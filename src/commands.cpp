@@ -14,6 +14,10 @@ const char *SceneCommand::getComponentJsonKey<AnimationComponent>() {
 template <> const char *SceneCommand::getComponentJsonKey<ScriptComponent>() {
   return "ScriptComponent";
 }
+template <>
+const char *SceneCommand::getComponentJsonKey<PathEffectComponent>() {
+  return "PathEffectComponent";
+}
 
 static inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
   return serializeEntity(scene, e);
@@ -75,6 +79,21 @@ void applyJsonToEntity(flecs::world &world, flecs::entity e,
                             j["updateFunction"].toString().toStdString(),
                             j["destroyFunction"].toString().toStdString(),
                             {}});
+  }
+  if (o.contains("PathEffectComponent")) {
+    const QJsonObject peJson = o["PathEffectComponent"].toObject();
+    PathEffectComponent pe;
+    pe.type = static_cast<PathEffectComponent::Type>(peJson["type"].toInt());
+    QJsonArray dashIntervalsArray = peJson["dashIntervals"].toArray();
+    pe.dashIntervals.clear();
+    for (const QJsonValue &val : dashIntervalsArray) {
+      pe.dashIntervals.push_back(val.toDouble());
+    }
+    pe.dashPhase = peJson["dashPhase"].toDouble();
+    pe.cornerRadius = peJson["cornerRadius"].toDouble();
+    pe.discreteLength = peJson["discreteLength"].toDouble();
+    pe.discreteDeviation = peJson["discreteDeviation"].toDouble();
+    e.set<PathEffectComponent>(pe);
   }
   if (o.contains("SceneBackgroundComponent"))
     e.add<SceneBackgroundComponent>();

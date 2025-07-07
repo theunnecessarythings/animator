@@ -4,12 +4,15 @@
 #include "commands.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QMenu>
 #include <QMetaProperty>
 #include <QMetaType>
 #include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
+
+Q_DECLARE_METATYPE(PathEffectComponent::Type);
 
 template <typename NumWidget, typename Getter, typename Setter>
 static NumWidget *makeSpinBox(QWidget *parent, double min, double max,
@@ -129,7 +132,6 @@ MainWindow::~MainWindow() {
 
 void MainWindow::captureInitialScene() {
   m_initialSceneJson = m_canvas->scene().serialize();
-  qDebug() << "Captured initial scene JSON:" << m_initialSceneJson;
 }
 
 void MainWindow::createMenus() {
@@ -624,6 +626,143 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
                  [](auto &s, const std::string &v) { s.destroyFunction = v; });
       });
 
+  // ========================== Path Effect ===============================
+  buildAttachableComponentEditor<PathEffectComponent>(
+      e, tr("Path Effect"),
+      [this, e](QFormLayout *form, PathEffectComponent &pec) {
+        // Type dropdown
+        auto *typeCombo = new QComboBox();
+        typeCombo->addItem(
+            "None", QVariant::fromValue(PathEffectComponent::Type::None));
+        typeCombo->addItem(
+            "Dash", QVariant::fromValue(PathEffectComponent::Type::Dash));
+        typeCombo->addItem(
+            "Corner", QVariant::fromValue(PathEffectComponent::Type::Corner));
+        typeCombo->addItem(
+            "Discrete",
+            QVariant::fromValue(PathEffectComponent::Type::Discrete));
+
+        int initialIndex = typeCombo->findData(QVariant::fromValue(pec.type));
+        typeCombo->setCurrentIndex(initialIndex);
+        form->addRow("Type", typeCombo);
+
+        // --- Create parameter editor groups ---
+        auto *dashGroup = new QWidget();
+        auto *dashForm = new QFormLayout(dashGroup);
+        dashForm->setContentsMargins(0, 0, 0, 0);
+        auto *cornerGroup = new QWidget();
+        auto *cornerForm = new QFormLayout(cornerGroup);
+        cornerForm->setContentsMargins(0, 0, 0, 0);
+        auto *discreteGroup = new QWidget();
+        auto *discreteForm = new QFormLayout(discreteGroup);
+        discreteForm->setContentsMargins(0, 0, 0, 0);
+
+        // --- Dash Editor ---
+        {
+          QString intervals;
+          for (size_t i = 0; i < pec.dashIntervals.size(); ++i) {
+            intervals += QString::number(pec.dashIntervals[i]);
+            if (i < pec.dashIntervals.size() - 1)
+              intervals += ", ";
+          }
+          auto *intervalsEdit = new QLineEdit(intervals);
+          dashForm->addRow("Intervals", intervalsEdit);
+          connect(intervalsEdit, &QLineEdit::editingFinished, this,
+                  [this, e, intervalsEdit] {
+                    if (e.has<PathEffectComponent>()) {
+                      auto &pec2 = e.get_mut<PathEffectComponent>();
+                      QStringList parts =
+                          intervalsEdit->text().split(',', Qt::SkipEmptyParts);
+                      std::vector<float> newIntervals;
+                      bool ok = true;
+                      for (const QString &part : parts) {
+                        newIntervals.push_back(part.toFloat(&ok));
+                        if (!ok)
+                          break;
+                      }
+                      if (ok) {
+                        pec2.dashIntervals = newIntervals;
+                        m_canvas->update();
+                      }
+                    }
+                  });
+
+          auto *phaseSpin = makeSpinBox<QDoubleSpinBox>(
+              this, 0, 1000, 0.1, [&pec] { return pec.dashPhase; },
+              [this, e](double v) {
+                if (e.has<PathEffectComponent>()) {
+                  e.get_mut<PathEffectComponent>().dashPhase = v;
+                  m_canvas->update();
+                }
+              });
+          dashForm->addRow("Phase", phaseSpin);
+        }
+
+        // --- Corner Editor ---
+        {
+          auto *radiusSpin = makeSpinBox<QDoubleSpinBox>(
+              this, 0, 1000, 0.1, [&pec] { return pec.cornerRadius; },
+              [this, e](double v) {
+                if (e.has<PathEffectComponent>()) {
+                  e.get_mut<PathEffectComponent>().cornerRadius = v;
+                  m_canvas->update();
+                }
+              });
+          cornerForm->addRow("Radius", radiusSpin);
+        }
+
+        // --- Discrete Editor ---
+        {
+          auto *lengthSpin = makeSpinBox<QDoubleSpinBox>(
+              this, 0, 1000, 0.1, [&pec] { return pec.discreteLength; },
+              [this, e](double v) {
+                if (e.has<PathEffectComponent>()) {
+                  e.get_mut<PathEffectComponent>().discreteLength = v;
+                  m_canvas->update();
+                }
+              });
+          discreteForm->addRow("Length", lengthSpin);
+
+          auto *devSpin = makeSpinBox<QDoubleSpinBox>(
+              this, 0, 1000, 0.1, [&pec] { return pec.discreteDeviation; },
+              [this, e](double v) {
+                if (e.has<PathEffectComponent>()) {
+                  e.get_mut<PathEffectComponent>().discreteDeviation = v;
+                  m_canvas->update();
+                }
+              });
+          discreteForm->addRow("Deviation", devSpin);
+        }
+
+        // Add groups to the main form layout
+        form->addRow(dashGroup);
+        form->addRow(cornerGroup);
+        form->addRow(discreteGroup);
+
+        // Visibility & update logic
+        auto updateVisibility = [=](int index) {
+          auto type = typeCombo->itemData(index)
+                          .value<PathEffectComponent::Type>();
+          dashGroup->setVisible(type == PathEffectComponent::Type::Dash);
+          cornerGroup->setVisible(type == PathEffectComponent::Type::Corner);
+          discreteGroup->setVisible(type ==
+                                    PathEffectComponent::Type::Discrete);
+        };
+
+        connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, e, typeCombo, updateVisibility](int index) {
+                  if (e.has<PathEffectComponent>()) {
+                    e.get_mut<PathEffectComponent>().type =
+                        typeCombo->itemData(index)
+                            .value<PathEffectComponent::Type>();
+                    updateVisibility(index);
+                    m_canvas->update();
+                  }
+                });
+
+        updateVisibility(typeCombo->currentIndex());
+      });
+
   // Add Component button
   auto *addComponentBtn = new QPushButton(tr("Add Component"));
   auto *addComponentMenu = new QMenu(addComponentBtn);
@@ -655,6 +794,27 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
       newJson["destroyFunction"] =
           QString::fromStdString(defaultInstance.destroyFunction);
       m_undoStack->push(new SetComponentCommand<ScriptComponent>(
+          this, e, QJsonObject(), newJson));
+    });
+  }
+
+  if (!e.has<PathEffectComponent>()) {
+    QAction *addPathEffectAction =
+        addComponentMenu->addAction(tr("Path Effect"));
+    connect(addPathEffectAction, &QAction::triggered, this, [this, e] {
+      PathEffectComponent defaultInstance;
+      QJsonObject newJson;
+      newJson["type"] = static_cast<int>(defaultInstance.type);
+      QJsonArray dashIntervalsArray;
+      for (float val : defaultInstance.dashIntervals) {
+        dashIntervalsArray.append(val);
+      }
+      newJson["dashIntervals"] = dashIntervalsArray;
+      newJson["dashPhase"] = defaultInstance.dashPhase;
+      newJson["cornerRadius"] = defaultInstance.cornerRadius;
+      newJson["discreteLength"] = defaultInstance.discreteLength;
+      newJson["discreteDeviation"] = defaultInstance.discreteDeviation;
+      m_undoStack->push(new SetComponentCommand<PathEffectComponent>(
           this, e, QJsonObject(), newJson));
     });
   }

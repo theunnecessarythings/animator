@@ -62,6 +62,23 @@ inline QJsonObject serializeEntity(const Scene &, Entity e) {
     o["ScriptComponent"] = j;
   }
 
+  // Path Effect ----------------------------------------------------------
+  if (e.has<PathEffectComponent>()) {
+    auto &pe = e.get<PathEffectComponent>();
+    QJsonObject j;
+    j["type"] = static_cast<int>(pe.type);
+    QJsonArray dashIntervalsArray;
+    for (float val : pe.dashIntervals) {
+      dashIntervalsArray.append(val);
+    }
+    j["dashIntervals"] = dashIntervalsArray;
+    j["dashPhase"] = pe.dashPhase;
+    j["cornerRadius"] = pe.cornerRadius;
+    j["discreteLength"] = pe.discreteLength;
+    j["discreteDeviation"] = pe.discreteDeviation;
+    o["PathEffectComponent"] = j;
+  }
+
   // Tag -------------------------------------------------------------------
   if (e.has<SceneBackgroundComponent>())
     o["SceneBackgroundComponent"] = true;
