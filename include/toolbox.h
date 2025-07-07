@@ -22,6 +22,7 @@ public:
     addTool("Curved Double Arrow", QIcon(":/icons/curved_double_arrow.svg"), "CurvedDoubleArrow");
     addTool("Annular Sector", QIcon(":/icons/arc.svg"), "AnnularSector");
     addTool("Sector", QIcon(":/icons/arc.svg"), "Sector");
+    addTool("Annulus", QIcon(":/icons/circle.svg"), "Annulus");
   }
 
 protected:

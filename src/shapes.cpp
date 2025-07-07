@@ -284,3 +284,13 @@ void SectorShape::rebuildPaths() const {
   styledPath.path.close();
   m_paths.push_back(styledPath);
 }
+
+void AnnulusShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.style = PathStyle::kStrokeAndFill;
+
+  styledPath.path.addCircle(center_x, center_y, outer_radius, SkPathDirection::kCW);
+  styledPath.path.addCircle(center_x, center_y, inner_radius, SkPathDirection::kCCW);
+  m_paths.push_back(styledPath);
+}

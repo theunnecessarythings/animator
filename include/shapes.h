@@ -260,7 +260,15 @@ DEFINE_SHAPE_CLASS(AnnularSectorShape, "AnnularSector", ANNULAR_SECTOR_PROPERTIE
   P(float, arc_center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(SectorShape, "Sector", SECTOR_PROPERTIES)
 
+#define ANNULUS_PROPERTIES(P)                                                \
+P(float, inner_radius, "Inner Radius", 1.0f)                               \
+P(float, outer_radius, "Outer Radius", 2.0f)                               \
+P(float, center_x, "Center X", 0.0f)                                       \
+P(float, center_y, "Center Y", 0.0f)
+DEFINE_SHAPE_CLASS(AnnulusShape, "Annulus", ANNULUS_PROPERTIES)
+
 namespace ShapeFactory {
+
 
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
@@ -283,6 +291,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<AnnularSectorShape>();
   if (kind == "Sector")
     return std::make_unique<SectorShape>();
+  if (kind == "Annulus")
+    return std::make_unique<AnnulusShape>();
   return nullptr;
 }
 } // namespace ShapeFactory
