@@ -254,3 +254,33 @@ void CurvedDoubleArrowShape::rebuildPaths() const {
     }
   }
 }
+
+void AnnularSectorShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.style = PathStyle::kStrokeAndFill;
+
+  SkRect outer_rect = SkRect::MakeXYWH(arc_center_x - outer_radius, arc_center_y - outer_radius,
+                                     2 * outer_radius, 2 * outer_radius);
+  SkRect inner_rect = SkRect::MakeXYWH(arc_center_x - inner_radius, arc_center_y - inner_radius,
+                                     2 * inner_radius, 2 * inner_radius);
+
+  styledPath.path.addArc(outer_rect, start_angle, angle);
+  styledPath.path.arcTo(inner_rect, start_angle + angle, -angle, false);
+  styledPath.path.close();
+  m_paths.push_back(styledPath);
+}
+
+void SectorShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.style = PathStyle::kStrokeAndFill;
+
+  SkRect rect = SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
+                               2 * radius, 2 * radius);
+
+  styledPath.path.addArc(rect, start_angle, angle);
+  styledPath.path.lineTo(arc_center_x, arc_center_y);
+  styledPath.path.close();
+  m_paths.push_back(styledPath);
+}

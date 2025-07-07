@@ -243,7 +243,25 @@ DEFINE_SHAPE_CLASS(CurvedArrowShape, "CurvedArrow", CURVED_ARROW_PROPERTIES)
 DEFINE_SHAPE_CLASS(CurvedDoubleArrowShape, "CurvedDoubleArrow",
                    CURVED_DOUBLE_ARROW_PROPERTIES)
 
+#define ANNULAR_SECTOR_PROPERTIES(P)                                         \
+  P(float, inner_radius, "Inner Radius", 50.0f)                              \
+  P(float, outer_radius, "Outer Radius", 100.0f)                             \
+  P(float, start_angle, "Start Angle", 0.0f)                                 \
+  P(float, angle, "Angle", 90.0f)                                            \
+  P(float, arc_center_x, "Center X", 0.0f)                                   \
+  P(float, arc_center_y, "Center Y", 0.0f)
+DEFINE_SHAPE_CLASS(AnnularSectorShape, "AnnularSector", ANNULAR_SECTOR_PROPERTIES)
+
+#define SECTOR_PROPERTIES(P)                                                 \
+  P(float, radius, "Radius", 100.0f)                                         \
+  P(float, start_angle, "Start Angle", 0.0f)                                 \
+  P(float, angle, "Angle", 90.0f)                                            \
+  P(float, arc_center_x, "Center X", 0.0f)                                   \
+  P(float, arc_center_y, "Center Y", 0.0f)
+DEFINE_SHAPE_CLASS(SectorShape, "Sector", SECTOR_PROPERTIES)
+
 namespace ShapeFactory {
+
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
     return std::make_unique<RectangleShape>();
@@ -261,6 +279,10 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<CurvedArrowShape>();
   if (kind == "CurvedDoubleArrow")
     return std::make_unique<CurvedDoubleArrowShape>();
+  if (kind == "AnnularSector")
+    return std::make_unique<AnnularSectorShape>();
+  if (kind == "Sector")
+    return std::make_unique<SectorShape>();
   return nullptr;
 }
 } // namespace ShapeFactory

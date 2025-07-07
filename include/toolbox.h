@@ -20,6 +20,8 @@ public:
     addTool("Arc Between Points", QIcon(":/icons/arc_between_points.svg"), "ArcBetweenPoints");
     addTool("Curved Arrow", QIcon(":/icons/curved_arrow.svg"), "CurvedArrow");
     addTool("Curved Double Arrow", QIcon(":/icons/curved_double_arrow.svg"), "CurvedDoubleArrow");
+    addTool("Annular Sector", QIcon(":/icons/arc.svg"), "AnnularSector");
+    addTool("Sector", QIcon(":/icons/arc.svg"), "Sector");
   }
 
 protected:
