@@ -17,6 +17,7 @@ public:
     addTool("Regular Polygram", QIcon(":/icons/circle.svg"), "RegularPolygram");
     addTool("Line", QIcon(":/icons/line.svg"), "Line");
     addTool("Arc", QIcon(":/icons/arc.svg"), "Arc");
+    addTool("Arc Between Points", QIcon(":/icons/arc_between_points.svg"), "ArcBetweenPoints");
   }
 
 protected:

@@ -8,5 +8,6 @@
     <file>icons/line.svg</file>
     <file>icons/text.svg</file>
     <file>icons/arc.svg</file>
+    <file>icons/arc_between_points.svg</file>
   </qresource>
 </RCC>

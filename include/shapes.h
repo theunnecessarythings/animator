@@ -168,6 +168,16 @@ DEFINE_SHAPE_CLASS(LineShape, "Line", LINE_PROPERTIES)
   P(float, arc_center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(ArcShape, "Arc", ARC_PROPERTIES)
 
+#define ARC_BETWEEN_POINTS_PROPERTIES(P)                                       \
+  P(float, x1, "X1", -50.0f)                                                   \
+  P(float, y1, "Y1", 0.0f)                                                     \
+  P(float, x2, "X2", 50.0f)                                                    \
+  P(float, y2, "Y2", 0.0f)                                                     \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(float, radius, "Radius", 0.0f) /* 0.0 means auto-calculate */
+DEFINE_SHAPE_CLASS(ArcBetweenPointsShape, "ArcBetweenPoints",
+                   ARC_BETWEEN_POINTS_PROPERTIES)
+
 namespace ShapeFactory {
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
@@ -180,6 +190,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<LineShape>();
   if (kind == "Arc")
     return std::make_unique<ArcShape>();
+  if (kind == "ArcBetweenPoints")
+    return std::make_unique<ArcBetweenPointsShape>();
   return nullptr;
 }
 } // namespace ShapeFactory
