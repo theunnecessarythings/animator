@@ -294,3 +294,13 @@ void AnnulusShape::rebuildPaths() const {
   styledPath.path.addCircle(center_x, center_y, inner_radius, SkPathDirection::kCCW);
   m_paths.push_back(styledPath);
 }
+
+void CubicBezierShape::rebuildPaths() const {
+  m_paths.clear();
+  StyledPath styledPath;
+  styledPath.style = PathStyle::kStroke;
+
+  styledPath.path.moveTo(x1, y1);
+  styledPath.path.cubicTo(x2, y2, x3, y3, x4, y4);
+  m_paths.push_back(styledPath);
+}

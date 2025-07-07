@@ -267,7 +267,19 @@ P(float, center_x, "Center X", 0.0f)                                       \
 P(float, center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(AnnulusShape, "Annulus", ANNULUS_PROPERTIES)
 
+#define CUBIC_BEZIER_PROPERTIES(P)                                             \
+  P(float, x1, "Start Anchor X", -100.0f)                                      \
+  P(float, y1, "Start Anchor Y", 0.0f)                                         \
+  P(float, x2, "Start Handle X", -50.0f)                                       \
+  P(float, y2, "Start Handle Y", 50.0f)                                        \
+  P(float, x3, "End Handle X", 50.0f)                                          \
+  P(float, y3, "End Handle Y", -50.0f)                                         \
+  P(float, x4, "End Anchor X", 100.0f)                                         \
+  P(float, y4, "End Anchor Y", 0.0f)
+DEFINE_SHAPE_CLASS(CubicBezierShape, "CubicBezier", CUBIC_BEZIER_PROPERTIES)
+
 namespace ShapeFactory {
+
 
 
 inline std::unique_ptr<Shape> create(const std::string &kind) {
@@ -293,6 +305,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<SectorShape>();
   if (kind == "Annulus")
     return std::make_unique<AnnulusShape>();
+  if (kind == "CubicBezier")
+    return std::make_unique<CubicBezierShape>();
   return nullptr;
 }
 } // namespace ShapeFactory

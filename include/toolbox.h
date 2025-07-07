@@ -23,6 +23,7 @@ public:
     addTool("Annular Sector", QIcon(":/icons/arc.svg"), "AnnularSector");
     addTool("Sector", QIcon(":/icons/arc.svg"), "Sector");
     addTool("Annulus", QIcon(":/icons/circle.svg"), "Annulus");
+    addTool("Cubic Bezier", QIcon(":/icons/bezier.svg"), "CubicBezier");
   }
 
 protected:
