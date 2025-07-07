@@ -5,7 +5,11 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QJsonObject>
+#include <QPushButton>
+#include <QTableWidget>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #include "include/core/SkCanvas.h"
@@ -28,7 +32,7 @@ enum class PathStyle { kFill, kStroke, kStrokeAndFill };
 // A simple struct to pair a path with its intended style
 struct StyledPath {
   SkPath path;
-  PathStyle style = PathStyle::kStrokeAndFill;
+  std::optional<PathStyle> style = std::nullopt;
 };
 
 class Shape {
@@ -52,29 +56,30 @@ public:
         paint.setPathEffect(pathEffect->makePathEffect());
       }
 
-      switch (styledPath.style) {
-      case PathStyle::kFill:
-        paint.setStyle(SkPaint::kFill_Style);
-        break;
-      case PathStyle::kStroke:
-        paint.setStyle(SkPaint::kStroke_Style);
-        break;
-      case PathStyle::kStrokeAndFill:
+      // Apply material properties
+      if (material.isFilled && material.isStroked) {
         paint.setStyle(SkPaint::kStrokeAndFill_Style);
-        break;
+      } else if (material.isFilled) {
+        paint.setStyle(SkPaint::kFill_Style);
+      } else if (material.isStroked) {
+        paint.setStyle(SkPaint::kStroke_Style);
       }
 
-      // Override with material properties if they are more restrictive
-      if (!material.isFilled && (styledPath.style == PathStyle::kFill ||
-                                  styledPath.style == PathStyle::kStrokeAndFill)) {
-        // If material says no fill, don't fill
-      } else if (!material.isStroked &&
-                 (styledPath.style == PathStyle::kStroke ||
-                  styledPath.style == PathStyle::kStrokeAndFill)) {
-        // If material says no stroke, don't stroke
-      } else {
-        canvas->drawPath(styledPath.path, paint);
+      // Override path style if specified
+      if (styledPath.style.has_value()) {
+        switch (styledPath.style.value()) {
+        case PathStyle::kFill:
+          paint.setStyle(SkPaint::kFill_Style);
+          break;
+        case PathStyle::kStroke:
+          paint.setStyle(SkPaint::kStroke_Style);
+          break;
+        case PathStyle::kStrokeAndFill:
+          paint.setStyle(SkPaint::kStrokeAndFill_Style);
+          break;
+        }
       }
+      canvas->drawPath(styledPath.path, paint);
     }
   }
 
@@ -83,7 +88,8 @@ public:
       rebuildPaths();
       m_isDirty = false;
     }
-    SkRect bounds = m_paths.empty() ? SkRect::MakeEmpty() : m_paths[0].path.getBounds();
+    SkRect bounds =
+        m_paths.empty() ? SkRect::MakeEmpty() : m_paths[0].path.getBounds();
     for (size_t i = 1; i < m_paths.size(); ++i) {
       bounds.join(m_paths[i].path.getBounds());
     }
@@ -243,28 +249,29 @@ DEFINE_SHAPE_CLASS(CurvedArrowShape, "CurvedArrow", CURVED_ARROW_PROPERTIES)
 DEFINE_SHAPE_CLASS(CurvedDoubleArrowShape, "CurvedDoubleArrow",
                    CURVED_DOUBLE_ARROW_PROPERTIES)
 
-#define ANNULAR_SECTOR_PROPERTIES(P)                                         \
-  P(float, inner_radius, "Inner Radius", 50.0f)                              \
-  P(float, outer_radius, "Outer Radius", 100.0f)                             \
-  P(float, start_angle, "Start Angle", 0.0f)                                 \
-  P(float, angle, "Angle", 90.0f)                                            \
-  P(float, arc_center_x, "Center X", 0.0f)                                   \
+#define ANNULAR_SECTOR_PROPERTIES(P)                                           \
+  P(float, inner_radius, "Inner Radius", 50.0f)                                \
+  P(float, outer_radius, "Outer Radius", 100.0f)                               \
+  P(float, start_angle, "Start Angle", 0.0f)                                   \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(float, arc_center_x, "Center X", 0.0f)                                     \
   P(float, arc_center_y, "Center Y", 0.0f)
-DEFINE_SHAPE_CLASS(AnnularSectorShape, "AnnularSector", ANNULAR_SECTOR_PROPERTIES)
+DEFINE_SHAPE_CLASS(AnnularSectorShape, "AnnularSector",
+                   ANNULAR_SECTOR_PROPERTIES)
 
-#define SECTOR_PROPERTIES(P)                                                 \
-  P(float, radius, "Radius", 100.0f)                                         \
-  P(float, start_angle, "Start Angle", 0.0f)                                 \
-  P(float, angle, "Angle", 90.0f)                                            \
-  P(float, arc_center_x, "Center X", 0.0f)                                   \
+#define SECTOR_PROPERTIES(P)                                                   \
+  P(float, radius, "Radius", 100.0f)                                           \
+  P(float, start_angle, "Start Angle", 0.0f)                                   \
+  P(float, angle, "Angle", 90.0f)                                              \
+  P(float, arc_center_x, "Center X", 0.0f)                                     \
   P(float, arc_center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(SectorShape, "Sector", SECTOR_PROPERTIES)
 
-#define ANNULUS_PROPERTIES(P)                                                \
-P(float, inner_radius, "Inner Radius", 1.0f)                               \
-P(float, outer_radius, "Outer Radius", 2.0f)                               \
-P(float, center_x, "Center X", 0.0f)                                       \
-P(float, center_y, "Center Y", 0.0f)
+#define ANNULUS_PROPERTIES(P)                                                  \
+  P(float, inner_radius, "Inner Radius", 1.0f)                                 \
+  P(float, outer_radius, "Outer Radius", 2.0f)                                 \
+  P(float, center_x, "Center X", 0.0f)                                         \
+  P(float, center_y, "Center Y", 0.0f)
 DEFINE_SHAPE_CLASS(AnnulusShape, "Annulus", ANNULUS_PROPERTIES)
 
 #define CUBIC_BEZIER_PROPERTIES(P)                                             \
@@ -278,9 +285,36 @@ DEFINE_SHAPE_CLASS(AnnulusShape, "Annulus", ANNULUS_PROPERTIES)
   P(float, y4, "End Anchor Y", 0.0f)
 DEFINE_SHAPE_CLASS(CubicBezierShape, "CubicBezier", CUBIC_BEZIER_PROPERTIES)
 
+class ArcPolygonShape : public Shape {
+public:
+  std::vector<SkPoint> vertices;
+  std::vector<float> angles;
+  std::vector<float> radii;
+
+  ArcPolygonShape() {
+    vertices.push_back(SkPoint::Make(-50, 50));
+    vertices.push_back(SkPoint::Make(50, 50));
+    vertices.push_back(SkPoint::Make(0, -50));
+    angles.assign(3, 45.0f);
+    radii.assign(3, 0.0f);
+    markDirty();
+  }
+  const char *getKindName() const override { return "ArcPolygon"; }
+  std::unique_ptr<Shape> clone() const override {
+    return std::make_unique<ArcPolygonShape>(*this);
+  }
+  QWidget *
+  createPropertyEditor(QWidget *parent,
+                       std::function<void(QJsonObject)> onChange) override;
+  QJsonObject serialize() const override;
+  void deserialize(const QJsonObject &props) override;
+  void rebuildPaths() const override;
+
+protected:
+  void markDirty() { m_isDirty = true; }
+};
+
 namespace ShapeFactory {
-
-
 
 inline std::unique_ptr<Shape> create(const std::string &kind) {
   if (kind == "Rectangle")
@@ -307,6 +341,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<AnnulusShape>();
   if (kind == "CubicBezier")
     return std::make_unique<CubicBezierShape>();
+  if (kind == "ArcPolygon")
+    return std::make_unique<ArcPolygonShape>();
   return nullptr;
 }
 } // namespace ShapeFactory

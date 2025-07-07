@@ -24,6 +24,7 @@ public:
     addTool("Sector", QIcon(":/icons/arc.svg"), "Sector");
     addTool("Annulus", QIcon(":/icons/circle.svg"), "Annulus");
     addTool("Cubic Bezier", QIcon(":/icons/bezier.svg"), "CubicBezier");
+    addTool("Arc Polygon", QIcon(":/icons/circle.svg"), "ArcPolygon");
   }
 
 protected:

@@ -1,12 +1,13 @@
 #include "shapes.h"
 #include "include/core/SkPathMeasure.h"
+#include <QJsonArray>
 
 // For simple shapes, we create one path that can be stroked and/or filled.
 void RectangleShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.path.addRect(SkRect::MakeWH(width, height), SkPathDirection::kCW, 0);
-  styledPath.style = PathStyle::kStrokeAndFill;
+  styledPath.path.addRect(SkRect::MakeWH(width, height), SkPathDirection::kCW,
+                          0);
   m_paths.push_back(styledPath);
 }
 
@@ -14,12 +15,12 @@ void CircleShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
   styledPath.path.addCircle(0, 0, radius, SkPathDirection::kCW);
-  styledPath.style = PathStyle::kStrokeAndFill;
   m_paths.push_back(styledPath);
 }
 
 // Helper for polygram
-SkPath createRegularPolygramPath(int num_vertices, float radius, int density, float start_angle) {
+SkPath createRegularPolygramPath(int num_vertices, float radius, int density,
+                                 float start_angle) {
   SkPath path;
   if (num_vertices < 3 || radius <= 0 || density < 1)
     return path;
@@ -44,8 +45,8 @@ SkPath createRegularPolygramPath(int num_vertices, float radius, int density, fl
 void RegularPolygramShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.path = createRegularPolygramPath(num_vertices, radius, density, start_angle);
-  styledPath.style = PathStyle::kStrokeAndFill;
+  styledPath.path =
+      createRegularPolygramPath(num_vertices, radius, density, start_angle);
   m_paths.push_back(styledPath);
 }
 
@@ -56,17 +57,16 @@ void LineShape::rebuildPaths() const {
   StyledPath styledPath;
   styledPath.path.moveTo(x1, y1);
   styledPath.path.lineTo(x2, y2);
-  styledPath.style = PathStyle::kStroke;
   m_paths.push_back(styledPath);
 }
 
 void ArcShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.path.addArc(SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
-                                 2 * radius, 2 * radius),
-                start_angle, angle);
-  styledPath.style = PathStyle::kStroke;
+  styledPath.path.addArc(SkRect::MakeXYWH(arc_center_x - radius,
+                                          arc_center_y - radius, 2 * radius,
+                                          2 * radius),
+                         start_angle, angle);
   m_paths.push_back(styledPath);
 }
 
@@ -141,21 +141,20 @@ bool getArcBetweenPointsParams(float x1, float y1, float x2, float y2,
 }
 
 void ArcBetweenPointsShape::rebuildPaths() const {
-    m_paths.clear();
-    StyledPath styledPath;
-    styledPath.style = PathStyle::kStroke;
+  m_paths.clear();
+  StyledPath styledPath;
 
-    SkPoint p1, p2;
-    SkRect arc_rect;
-    float start_angle_deg, sweep_angle_deg;
-    if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
-                                  arc_rect, start_angle_deg, sweep_angle_deg)) {
-        styledPath.path.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
-    } else {
-        styledPath.path.moveTo(x1, y1);
-        styledPath.path.lineTo(x2, y2);
-    }
-    m_paths.push_back(styledPath);
+  SkPoint p1, p2;
+  SkRect arc_rect;
+  float start_angle_deg, sweep_angle_deg;
+  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2, arc_rect,
+                                start_angle_deg, sweep_angle_deg)) {
+    styledPath.path.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
+  } else {
+    styledPath.path.moveTo(x1, y1);
+    styledPath.path.lineTo(x2, y2);
+  }
+  m_paths.push_back(styledPath);
 }
 
 // Helper function to create an arrowhead path
@@ -181,14 +180,13 @@ void CurvedArrowShape::rebuildPaths() const {
 
   // 1. Create the arc path (for stroking)
   StyledPath arcStyledPath;
-  arcStyledPath.style = PathStyle::kStroke;
   SkPath &arcPath = arcStyledPath.path;
 
   SkPoint p1, p2;
   SkRect arc_rect;
   float start_angle_deg, sweep_angle_deg;
-  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
-                                arc_rect, start_angle_deg, sweep_angle_deg)) {
+  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2, arc_rect,
+                                start_angle_deg, sweep_angle_deg)) {
     arcPath.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
   } else {
     arcPath.moveTo(x1, y1);
@@ -205,7 +203,8 @@ void CurvedArrowShape::rebuildPaths() const {
       if (tangent.length() > 1e-6) {
         StyledPath arrowheadStyledPath;
         arrowheadStyledPath.style = PathStyle::kFill;
-        arrowheadStyledPath.path = createArrowheadPath(position, tangent, arrowhead_size);
+        arrowheadStyledPath.path =
+            createArrowheadPath(position, tangent, arrowhead_size);
         m_paths.push_back(arrowheadStyledPath);
       }
     }
@@ -217,14 +216,13 @@ void CurvedDoubleArrowShape::rebuildPaths() const {
 
   // 1. Create the arc path (for stroking)
   StyledPath arcStyledPath;
-  arcStyledPath.style = PathStyle::kStroke;
   SkPath &arcPath = arcStyledPath.path;
 
   SkPoint p1, p2;
   SkRect arc_rect;
   float start_angle_deg, sweep_angle_deg;
-  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2,
-                                arc_rect, start_angle_deg, sweep_angle_deg)) {
+  if (getArcBetweenPointsParams(x1, y1, x2, y2, angle, radius, p1, p2, arc_rect,
+                                start_angle_deg, sweep_angle_deg)) {
     arcPath.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
   } else {
     arcPath.moveTo(x1, y1);
@@ -238,18 +236,21 @@ void CurvedDoubleArrowShape::rebuildPaths() const {
     SkPoint position_start, position_end;
     SkVector tangent_start, tangent_end;
     path_measure.getPosTan(0, &position_start, &tangent_start);
-    path_measure.getPosTan(path_measure.getLength(), &position_end, &tangent_end);
+    path_measure.getPosTan(path_measure.getLength(), &position_end,
+                           &tangent_end);
 
     if (tangent_start.length() > 1e-6) {
       StyledPath arrowheadStyledPath;
       arrowheadStyledPath.style = PathStyle::kFill;
-      arrowheadStyledPath.path = createArrowheadPath(position_start, -tangent_start, arrowhead_size);
+      arrowheadStyledPath.path =
+          createArrowheadPath(position_start, -tangent_start, arrowhead_size);
       m_paths.push_back(arrowheadStyledPath);
     }
     if (tangent_end.length() > 1e-6) {
       StyledPath arrowheadStyledPath;
       arrowheadStyledPath.style = PathStyle::kFill;
-      arrowheadStyledPath.path = createArrowheadPath(position_end, tangent_end, arrowhead_size);
+      arrowheadStyledPath.path =
+          createArrowheadPath(position_end, tangent_end, arrowhead_size);
       m_paths.push_back(arrowheadStyledPath);
     }
   }
@@ -258,12 +259,13 @@ void CurvedDoubleArrowShape::rebuildPaths() const {
 void AnnularSectorShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.style = PathStyle::kStrokeAndFill;
 
-  SkRect outer_rect = SkRect::MakeXYWH(arc_center_x - outer_radius, arc_center_y - outer_radius,
-                                     2 * outer_radius, 2 * outer_radius);
-  SkRect inner_rect = SkRect::MakeXYWH(arc_center_x - inner_radius, arc_center_y - inner_radius,
-                                     2 * inner_radius, 2 * inner_radius);
+  SkRect outer_rect =
+      SkRect::MakeXYWH(arc_center_x - outer_radius, arc_center_y - outer_radius,
+                       2 * outer_radius, 2 * outer_radius);
+  SkRect inner_rect =
+      SkRect::MakeXYWH(arc_center_x - inner_radius, arc_center_y - inner_radius,
+                       2 * inner_radius, 2 * inner_radius);
 
   styledPath.path.addArc(outer_rect, start_angle, angle);
   styledPath.path.arcTo(inner_rect, start_angle + angle, -angle, false);
@@ -274,10 +276,9 @@ void AnnularSectorShape::rebuildPaths() const {
 void SectorShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.style = PathStyle::kStrokeAndFill;
 
   SkRect rect = SkRect::MakeXYWH(arc_center_x - radius, arc_center_y - radius,
-                               2 * radius, 2 * radius);
+                                 2 * radius, 2 * radius);
 
   styledPath.path.addArc(rect, start_angle, angle);
   styledPath.path.lineTo(arc_center_x, arc_center_y);
@@ -288,19 +289,198 @@ void SectorShape::rebuildPaths() const {
 void AnnulusShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.style = PathStyle::kStrokeAndFill;
 
-  styledPath.path.addCircle(center_x, center_y, outer_radius, SkPathDirection::kCW);
-  styledPath.path.addCircle(center_x, center_y, inner_radius, SkPathDirection::kCCW);
+  styledPath.path.addCircle(center_x, center_y, outer_radius,
+                            SkPathDirection::kCW);
+  styledPath.path.addCircle(center_x, center_y, inner_radius,
+                            SkPathDirection::kCCW);
   m_paths.push_back(styledPath);
 }
 
 void CubicBezierShape::rebuildPaths() const {
   m_paths.clear();
   StyledPath styledPath;
-  styledPath.style = PathStyle::kStroke;
 
   styledPath.path.moveTo(x1, y1);
   styledPath.path.cubicTo(x2, y2, x3, y3, x4, y4);
   m_paths.push_back(styledPath);
+}
+
+void ArcPolygonShape::rebuildPaths() const {
+  m_paths.clear();
+  if (vertices.size() < 2) {
+    return;
+  }
+
+  StyledPath styledPath;
+  SkPath &path = styledPath.path;
+
+  // Build the polygon by creating each segment as a separate path and then
+  // stitching them together. This is more robust than using arcTo for complex
+  // polygons.
+  for (size_t i = 0; i < vertices.size(); ++i) {
+    const auto &start_point = vertices[i];
+    const auto &end_point = vertices[(i + 1) % vertices.size()];
+    float angle = (i < angles.size()) ? angles[i] : 0.0f;
+    float radius = (i < radii.size()) ? radii[i] : 0.0f;
+
+    SkPath segmentPath;
+    SkPoint p1, p2;
+    SkRect arc_rect;
+    float start_angle_deg, sweep_angle_deg;
+    if (getArcBetweenPointsParams(start_point.fX, start_point.fY, end_point.fX,
+                                  end_point.fY, angle, radius, p1, p2, arc_rect,
+                                  start_angle_deg, sweep_angle_deg)) {
+      segmentPath.addArc(arc_rect, start_angle_deg, sweep_angle_deg);
+    } else {
+      segmentPath.moveTo(start_point);
+      segmentPath.lineTo(end_point);
+    }
+
+    // kExtend_AddPathMode will connect the last point of the main path to the
+    // first point of the segment path if they don't already match.
+    path.addPath(segmentPath, SkPath::kExtend_AddPathMode);
+  }
+
+  path.close();
+  m_paths.push_back(styledPath);
+}
+
+QJsonObject ArcPolygonShape::serialize() const {
+  QJsonObject props;
+  QJsonArray jsonVertices;
+  for (const auto &v : vertices) {
+    QJsonObject vert_obj;
+    vert_obj["x"] = v.fX;
+    vert_obj["y"] = v.fY;
+    jsonVertices.append(vert_obj);
+  }
+  props["vertices"] = jsonVertices;
+
+  QJsonArray jsonAngles;
+  for (float a : angles) {
+    jsonAngles.append(a);
+  }
+  props["angles"] = jsonAngles;
+
+  QJsonArray jsonRadii;
+  for (float r : radii) {
+    jsonRadii.append(r);
+  }
+  props["radii"] = jsonRadii;
+
+  return props;
+}
+
+void ArcPolygonShape::deserialize(const QJsonObject &props) {
+  vertices.clear();
+  if (props.contains("vertices") && props["vertices"].isArray()) {
+    QJsonArray jsonVertices = props["vertices"].toArray();
+    for (const auto &val : jsonVertices) {
+      QJsonObject vert_obj = val.toObject();
+      vertices.push_back(
+          SkPoint::Make(vert_obj["x"].toDouble(), vert_obj["y"].toDouble()));
+    }
+  }
+
+  angles.clear();
+  if (props.contains("angles") && props["angles"].isArray()) {
+    QJsonArray jsonAngles = props["angles"].toArray();
+    for (const auto &val : jsonAngles) {
+      angles.push_back(val.toDouble());
+    }
+  }
+
+  radii.clear();
+  if (props.contains("radii") && props["radii"].isArray()) {
+    QJsonArray jsonRadii = props["radii"].toArray();
+    for (const auto &val : jsonRadii) {
+      radii.push_back(val.toDouble());
+    }
+  }
+
+  markDirty();
+}
+
+QWidget *ArcPolygonShape::createPropertyEditor(
+    QWidget *parent, std::function<void(QJsonObject)> onChange) {
+  auto *widget = new QWidget(parent);
+  auto *layout = new QVBoxLayout(widget);
+
+  // Vertex Table
+  auto *vertex_table = new QTableWidget(parent);
+  vertex_table->setColumnCount(2);
+  vertex_table->setHorizontalHeaderLabels({"X", "Y"});
+  vertex_table->setRowCount(vertices.size());
+  for (size_t i = 0; i < vertices.size(); ++i) {
+    vertex_table->setItem(
+        i, 0, new QTableWidgetItem(QString::number(vertices[i].fX)));
+    vertex_table->setItem(
+        i, 1, new QTableWidgetItem(QString::number(vertices[i].fY)));
+  }
+  layout->addWidget(vertex_table);
+
+  // Arc Properties Table
+  auto *arc_table = new QTableWidget(parent);
+  arc_table->setColumnCount(2);
+  arc_table->setHorizontalHeaderLabels({"Angle", "Radius"});
+  arc_table->setRowCount(angles.size());
+  for (size_t i = 0; i < angles.size(); ++i) {
+    arc_table->setItem(i, 0, new QTableWidgetItem(QString::number(angles[i])));
+    arc_table->setItem(i, 1, new QTableWidgetItem(QString::number(radii[i])));
+  }
+  layout->addWidget(arc_table);
+
+  // Add/Remove Buttons
+  auto *add_button = new QPushButton("Add Vertex", parent);
+  auto *remove_button = new QPushButton("Remove Vertex", parent);
+  layout->addWidget(add_button);
+  layout->addWidget(remove_button);
+
+  auto update_shape = [this, vertex_table, arc_table, onChange]() {
+    vertices.clear();
+    for (int i = 0; i < vertex_table->rowCount(); ++i) {
+      if (vertex_table->item(i, 0) && vertex_table->item(i, 1)) {
+        vertices.push_back(
+            SkPoint::Make(vertex_table->item(i, 0)->text().toFloat(),
+                          vertex_table->item(i, 1)->text().toFloat()));
+      }
+    }
+    angles.clear();
+    radii.clear();
+    for (int i = 0; i < arc_table->rowCount(); ++i) {
+      if (arc_table->item(i, 0) && arc_table->item(i, 1)) {
+        angles.push_back(arc_table->item(i, 0)->text().toFloat());
+        radii.push_back(arc_table->item(i, 1)->text().toFloat());
+      }
+    }
+    markDirty();
+    if (onChange) {
+      onChange(serialize());
+    }
+  };
+
+  QObject::connect(add_button, &QPushButton::clicked,
+                   [vertex_table, arc_table, update_shape]() {
+                     int row = vertex_table->rowCount();
+                     vertex_table->insertRow(row);
+                     vertex_table->setItem(row, 0, new QTableWidgetItem("0"));
+                     vertex_table->setItem(row, 1, new QTableWidgetItem("0"));
+                     arc_table->insertRow(row);
+                     arc_table->setItem(row, 0, new QTableWidgetItem("0"));
+                     arc_table->setItem(row, 1, new QTableWidgetItem("0"));
+                     update_shape();
+                   });
+
+  QObject::connect(remove_button, &QPushButton::clicked,
+                   [vertex_table, arc_table, update_shape]() {
+                     vertex_table->removeRow(vertex_table->rowCount() - 1);
+                     arc_table->removeRow(arc_table->rowCount() - 1);
+                     update_shape();
+                   });
+
+  QObject::connect(vertex_table, &QTableWidget::cellChanged, update_shape);
+  QObject::connect(arc_table, &QTableWidget::cellChanged, update_shape);
+
+  return widget;
 }
