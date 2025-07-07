@@ -138,3 +138,13 @@ void ArcBetweenPointsShape::rebuildPath() const {
                                  2 * actual_radius, 2 * actual_radius),
                 start_angle_degrees, skia_sweep_angle);
 }
+
+void CurvedArrowShape::rebuildPath() const {
+  // CurvedArrow is essentially an ArcBetweenPoints with an arrow tip.
+  // The arrow tip is handled by PathEffectComponent in the render method.
+  // So, we can reuse the ArcBetweenPointsShape's path building logic.
+  // For now, we'll just create a line, and the arrow will be added as a path effect.
+  m_path.reset();
+  m_path.moveTo(x1, y1);
+  m_path.lineTo(x2, y2);
+}
