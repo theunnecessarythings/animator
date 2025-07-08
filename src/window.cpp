@@ -106,6 +106,9 @@ inline QWidget *makeEditor(QWidget *parent, const QMetaProperty &mp,
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_canvas(new SkiaCanvasWidget(this)),
       m_undoStack(new QUndoStack(this)) {
+  m_fileWatcher = new QFileSystemWatcher(this);
+  connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this,
+          &MainWindow::onScriptFileChanged);
   setCentralWidget(m_canvas);
   m_canvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setMinimumSize(QSize(800, 700));
@@ -507,6 +510,7 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
               pathEdit, &QLineEdit::editingFinished, this, [this, e, pathEdit] {
                 if (e.has<ScriptComponent>()) {
                   auto &sc2 = e.get_mut<ScriptComponent>();
+                  std::string oldValue = sc2.scriptPath;
                   std::string newValue = pathEdit->text().toStdString();
 
                   if (newValue == sc2.scriptPath)
@@ -531,6 +535,18 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
                   m_undoStack->push(new SetComponentCommand<ScriptComponent>(
                       this, e, oldJson, newJson));
+
+                  // Update file watcher
+                  if (!oldValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(oldValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->removePath(abs_path);
+                  }
+                  if (!newValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(newValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->addPath(abs_path);
+                  }
                 }
               });
 
@@ -544,6 +560,7 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
               pathEdit->setText(relativePath);
               if (e.has<ScriptComponent>()) {
                 auto &sc2 = e.get_mut<ScriptComponent>();
+                std::string oldValue = sc2.scriptPath;
                 std::string newValue = relativePath.toStdString();
                 if (newValue != sc2.scriptPath) {
                   QJsonObject oldJson;
@@ -565,6 +582,19 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
                   m_undoStack->push(new SetComponentCommand<ScriptComponent>(
                       this, e, oldJson, newJson));
+                  // Update file watcher
+                  qDebug() << "Adding file watcher for"
+                           << QString::fromStdString(newValue);
+                  if (!oldValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(oldValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->removePath(abs_path);
+                  }
+                  if (!newValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(newValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->addPath(abs_path);
+                  }
                 }
               }
             }
@@ -610,6 +640,15 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
         makeEdit("Update", sc.updateFunction, "updateFunction");
         makeEdit("Draw", sc.drawFunction, "drawFunction");
         makeEdit("Destroy", sc.destroyFunction, "destroyFunction");
+        auto *removeBtn =
+            form->findChild<QPushButton *>(QStringLiteral("Remove Component"));
+        if (removeBtn) {
+          const std::string lastPath = sc.scriptPath;
+          connect(removeBtn, &QPushButton::clicked, this, [this, lastPath] {
+            if (!lastPath.empty())
+              m_fileWatcher->removePath(QString::fromStdString(lastPath));
+          });
+        }
       });
 
   // ========================== Path Effect ===============================
@@ -1123,4 +1162,12 @@ void MainWindow::syncTransformEditors(Entity e) {
     upd("sx", tr.sx);
     upd("sy", tr.sy);
   }
+}
+
+void MainWindow::onScriptFileChanged(const QString &path) {
+  qDebug() << "Script file changed:" << path;
+  auto &ss = m_canvas->scene().getScriptSystem();
+  ss.reloadScript(path.toStdString());
+  onStopResetButtonClicked();
+  onPlayPauseButtonClicked();
 }

@@ -26,7 +26,7 @@ function on_draw(entity, registry, canvas)
     canvas:restore()
 
     -- 2. Draw a pulsating circle (filled)
-    paint:setColor(Color(math.floor(rotation_angle) % 255, 0, 0, 255)) 
+    paint:setColor(Color(128, 129, 0, 255)) 
     paint:setStyle(true, false) -- Set style to fill (fill=true, stroke=false)
 
     canvas:save()

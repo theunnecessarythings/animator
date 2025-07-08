@@ -22,6 +22,7 @@ public:
       for (auto a : args) {
         messages << QString::fromStdString(a.as<std::string>());
       }
+      qDebug().noquote() << messages.join(' ');
     });
 
     // Expose C++ components to Lua
@@ -220,6 +221,21 @@ public:
       } else {
         qWarning() << "Script environment invalid for update call for entity"
                    << e.id();
+      }
+    });
+  }
+
+  void reloadScript(const std::string &changedPath) {
+    world_.each<ScriptComponent>([&](flecs::entity e, ScriptComponent &sc) {
+      if (sc.scriptPath == changedPath) {
+        if (sc.scriptEnv.valid()) {
+          engine_.call(sc.scriptEnv, sc.destroyFunction);
+        }
+        sc.scriptEnv = sol::nil;
+        sc.scriptEnv = engine_.loadScript(sc.scriptPath, e);
+        if (sc.scriptEnv.valid()) {
+          engine_.call(sc.scriptEnv, sc.startFunction);
+        }
       }
     });
   }

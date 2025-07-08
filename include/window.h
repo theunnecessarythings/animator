@@ -12,6 +12,7 @@
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFileSystemWatcher>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -74,6 +75,7 @@ private slots:
   void onTransformationCompleted(Entity entity, float oldX, float oldY,
                                  float oldRotation, float newX, float newY,
                                  float newRotation);
+  void onScriptFileChanged(const QString &path);
 
 private:
   // Helpers ------------------------------------------------------------------
@@ -117,4 +119,6 @@ private:
   /* snapshot of the scene at launch / after Stop */
   QJsonObject m_initialSceneJson;
   QJsonObject m_preSimulationState;
+
+  QFileSystemWatcher *m_fileWatcher;
 };
