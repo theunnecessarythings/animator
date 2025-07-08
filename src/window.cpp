@@ -878,9 +878,9 @@ void MainWindow::buildAttachableComponentEditor(
 }
 
 void MainWindow::onNewFile() {
+  m_canvas->setSceneResetting(true);
   m_undoStack->clear();
-  // m_canvas->setSelectedEntities({});
-  // m_canvas->scene().clear();
+  m_canvas->setSelectedEntities({});
   m_canvas->resetSceneAndDeserialize({});
   m_sceneModel->setScene(&m_canvas->scene());
   m_sceneModel->refresh();
@@ -888,36 +888,39 @@ void MainWindow::onNewFile() {
 
   // Create bouncing ball entity
   // m_canvas->scene().createShape("Circle", 100, 100);
-  m_canvas->update();
 
   // captureInitialScene();
   // m_preSimulationState = QJsonObject();
   // m_initialSceneJson = m_canvas->scene().serialize();
+  m_canvas->setSceneResetting(false);
+  m_canvas->update();
 }
 
 void MainWindow::onOpenFile() {
+  m_canvas->setSceneResetting(true);
   m_undoStack->clear();
-  // m_canvas->setSelectedEntities({});
   QString filePath = QFileDialog::getOpenFileName(this, tr("Open Scene"), {},
                                                   tr("Scene Files(*.json)"));
-  if (filePath.isEmpty())
+  if (filePath.isEmpty()) {
+    m_canvas->setSceneResetting(false);
     return;
+  }
 
   QFile loadFile(filePath);
   if (!loadFile.open(QIODevice::ReadOnly)) {
     qWarning("Couldn't open scene file.");
+    m_canvas->setSceneResetting(false);
     return;
   }
 
   QJsonDocument doc(QJsonDocument::fromJson(loadFile.readAll()));
-  // m_canvas->scene().deserialize(doc.object());
+  m_canvas->setSelectedEntities({});
   m_canvas->resetSceneAndDeserialize(doc.object());
   m_sceneModel->setScene(&m_canvas->scene());
-  m_canvas->setSelectedEntities({});
-  // captureInitialScene();
   m_sceneModel->refresh();
   // m_preSimulationState = QJsonObject();
   // m_initialSceneJson = m_canvas->scene().serialize();
+  m_canvas->setSceneResetting(false);
   m_canvas->update();
 }
 
