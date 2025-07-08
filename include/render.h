@@ -1,10 +1,12 @@
 #pragma once
 #include "ecs.h"
+#include "scripting.h"
 #include "shapes.h"
 
 class RenderSystem {
 public:
-  explicit RenderSystem(flecs::world &w) : world_(w) {}
+  explicit RenderSystem(flecs::world &w, ScriptSystem &ss)
+      : world_(w), scriptSystem_(ss) {}
 
   void render(SkCanvas *canvas, float currentTime) {
     std::vector<Entity> bg, fg;
@@ -37,6 +39,17 @@ public:
           pathEffect = &e.get<PathEffectComponent>();
         }
         shapeCmp.shape->render(canvas, mat, pathEffect);
+
+        // Custom script drawing
+        if (e.has<ScriptComponent>()) {
+          auto &sc = e.get_mut<ScriptComponent>();
+          if (sc.scriptEnv.valid() && !sc.drawFunction.empty() &&
+              sc.scriptEnv[sc.drawFunction].valid()) {
+            scriptSystem_.getEngine().call_draw(sc.scriptEnv, sc.drawFunction,
+                                                canvas);
+          }
+        }
+
         canvas->restore();
       }
     };
@@ -47,4 +60,5 @@ public:
 
 private:
   flecs::world &world_;
+  ScriptSystem &scriptSystem_;
 };

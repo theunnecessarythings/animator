@@ -43,7 +43,6 @@ public:
 
   /** Take a JSON snapshot of the current scene (used for “Stop/Reset”). */
   void captureInitialScene();
-  void refreshProperties();
 
 private slots:
   // Playback/Timeline

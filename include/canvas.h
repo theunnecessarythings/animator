@@ -27,17 +27,19 @@
 #include <QSurfaceFormat>
 
 #include <cmath>
+#include <memory>
 
 using namespace skgpu::ganesh;
 
 class SkiaCanvasWidget : public QOpenGLWidget, protected QOpenGLFunctions {
   Q_OBJECT
 public:
-  explicit SkiaCanvasWidget(QWidget *parent = nullptr) : QOpenGLWidget(parent) {
+  explicit SkiaCanvasWidget(QWidget *parent = nullptr)
+      : QOpenGLWidget(parent), scene_(std::make_unique<Scene>()) {
     setAcceptDrops(true);
   }
 
-  Scene &scene() { return scene_; }
+  Scene &scene() { return *scene_; }
 
   void setSelectedEntity(Entity entity) {
     selectedEntities_.clear();
@@ -53,6 +55,13 @@ public:
     emit canvasSelectionChanged(selectedEntities_);
   }
   const QList<Entity> &getSelectedEntities() const { return selectedEntities_; }
+
+  void resetSceneAndDeserialize(const QJsonObject &json) {
+    scene_ = std::make_unique<Scene>();
+    if (!json.isEmpty())
+      scene_->deserialize(json);
+    scene_->deserialize(json);
+  }
 
   void setCurrentTime(float t) { currentTime_ = t; }
 
@@ -128,7 +137,7 @@ protected:
     c->clear(SK_ColorWHITE);
 
     // Render scene ------------------------------------------------------
-    scene_.draw(c, currentTime_);
+    scene_->draw(c, currentTime_);
 
     // Selection overlays -----------------------------------------------
     drawSelection(c);
@@ -155,9 +164,9 @@ protected:
     QPointF pos = e->posF();
     e->acceptProposedAction();
 
-    scene_.createShape(id.toStdString(), pos.x(), pos.y());
+    auto ent = scene_->createShape(id.toStdString(), pos.x(), pos.y());
     emit sceneChanged();
-    update();
+    setSelectedEntity(ent);
   }
 
   // -------------------------------------------------------------------------
@@ -170,7 +179,7 @@ protected:
     isRotating_ = false;
     initialTransforms_.clear();
 
-    auto &ecs = scene_.ecs();
+    auto &ecs = scene_->ecs();
 
     // Hit detection ------------------------------------------------------
     ecs.each<TransformComponent>(
@@ -296,7 +305,7 @@ protected:
   }
 
   void mouseReleaseEvent(QMouseEvent *e) override {
-    auto &ecs = scene_.ecs();
+    auto &ecs = scene_->ecs();
 
     if (isMarqueeSelecting_) {
       isMarqueeSelecting_ = false;
@@ -427,7 +436,7 @@ private:
   sk_sp<SkFontMgr> fontMgr;
 
   // Scene wrapper
-  Scene scene_;
+  std::unique_ptr<Scene> scene_;
 
   // Interaction state
   QList<Entity> selectedEntities_;

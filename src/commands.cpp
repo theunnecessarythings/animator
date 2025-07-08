@@ -77,6 +77,9 @@ void applyJsonToEntity(flecs::world &world, flecs::entity e,
     e.set<ScriptComponent>({j["scriptPath"].toString().toStdString(),
                             j["startFunction"].toString().toStdString(),
                             j["updateFunction"].toString().toStdString(),
+                            j.contains("drawFunction")
+                                ? j["drawFunction"].toString().toStdString()
+                                : "on_draw",
                             j["destroyFunction"].toString().toStdString(),
                             {}});
   }

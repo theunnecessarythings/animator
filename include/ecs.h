@@ -65,6 +65,7 @@ struct ScriptComponent {
   std::string startFunction = "on_start";
   std::string updateFunction = "on_update";
   std::string destroyFunction = "on_destroy";
+  std::string drawFunction = "on_draw";
   sol::table scriptEnv; // each script gets its own Lua env
 };
 

@@ -98,6 +98,18 @@ public:
     endResetModel();
   }
 
+  void clear() {
+    beginResetModel();
+    entities_.clear();
+    endResetModel();
+  }
+
+  void setScene(Scene *scene) {
+    // beginResetModel();
+    scene_ = scene;
+    // endResetModel();
+  }
+
 private:
   Scene *scene_ = nullptr;       // non-owning
   std::vector<Entity> entities_; // row cache

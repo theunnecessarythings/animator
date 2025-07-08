@@ -7,21 +7,24 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <memory>
 #include <unordered_map>
 
 class Scene {
 public:
   Scene()
-      : scriptingEngine(world), scriptSystem(world, scriptingEngine),
-        renderer(world) {
-    world.set<TimeSingleton>({0.f});
+      : world(std::make_unique<flecs::world>()), scriptingEngine(*world),
+        scriptSystem(*world, scriptingEngine), renderer(*world, scriptSystem) {
+    world->set<TimeSingleton>({0.f});
   }
+
+  ~Scene() { world.reset(); }
 
   // ---------------------------------------------------------------------
   //  Public helpers used by the editor
   // ---------------------------------------------------------------------
   Entity createShape(const std::string &kind, float x, float y) {
-    Entity e = world.entity();
+    Entity e = world->entity();
 
     e.set<TransformComponent>({x, y});
     e.set<ShapeComponent>(ShapeFactory::create(kind));
@@ -33,7 +36,7 @@ public:
   }
 
   Entity createBackground(float width, float height) {
-    Entity e = world.entity("Background");
+    Entity e = world->entity("Background");
     e.set<NameComponent>({"Background"});
     e.set<TransformComponent>({0, 0, 0, 1.f, 1.f});
     e.add<SceneBackgroundComponent>();
@@ -54,8 +57,8 @@ public:
   //  Frame tick helpers
   // ---------------------------------------------------------------------
   void update(float dt, float timelineSeconds) {
-    world.get_mut<TimeSingleton>().time = timelineSeconds;
-    world.progress(dt);
+    world->get_mut<TimeSingleton>().time = timelineSeconds;
+    world->progress(dt);
   }
 
   void draw(SkCanvas *canvas, float timelineSeconds) {
@@ -68,7 +71,7 @@ public:
   QJsonObject serialize() const {
     QJsonObject obj;
     QJsonArray arr;
-    world.each<const TransformComponent>(
+    world->each<const TransformComponent>(
         [&](flecs::entity e, const TransformComponent &) {
           QJsonObject ent;
           ent["id"] = static_cast<qint64>(e.id());
@@ -110,6 +113,7 @@ public:
             j["scriptPath"] = QString::fromStdString(s.scriptPath);
             j["startFunction"] = QString::fromStdString(s.startFunction);
             j["updateFunction"] = QString::fromStdString(s.updateFunction);
+            j["drawFunction"] = QString::fromStdString(s.drawFunction);
             j["destroyFunction"] = QString::fromStdString(s.destroyFunction);
             ent["ScriptComponent"] = j;
           }
@@ -131,17 +135,17 @@ public:
   }
 
   void deserialize(const QJsonObject &root) {
-    clear();
+    // clear();
     if (!root.contains("entities") || !root["entities"].isArray())
       return;
-
+    clear();
     const QJsonArray arr = root["entities"].toArray();
     qDebug() << "Deserializing" << arr.size() << "entities.";
 
     for (const auto &v : arr)
       if (v.isObject()) {
         const QJsonObject eobj = v.toObject();
-        Entity e = world.entity();
+        Entity e = world->entity();
 
         // Name -------------------------------------------------------------
         if (eobj.contains("NameComponent"))
@@ -180,11 +184,15 @@ public:
         // Script -----------------------------------------------------------
         if (eobj.contains("ScriptComponent")) {
           const QJsonObject j = eobj["ScriptComponent"].toObject();
-          e.set<ScriptComponent>({j["scriptPath"].toString().toStdString(),
-                                  j["startFunction"].toString().toStdString(),
-                                  j["updateFunction"].toString().toStdString(),
-                                  j["destroyFunction"].toString().toStdString(),
-                                  {}}); // env filled on OnAdd
+          e.set<ScriptComponent>(
+              {j["scriptPath"].toString().toStdString(),
+               j["startFunction"].toString().toStdString(),
+               j["updateFunction"].toString().toStdString(),
+               j.contains("drawFunction")
+                   ? j["drawFunction"].toString().toStdString()
+                   : "on_draw",
+               j["destroyFunction"].toString().toStdString(),
+               {}}); // env filled on OnAdd
         }
 
         // Tag --------------------------------------------------------------
@@ -211,8 +219,8 @@ public:
   ScriptSystem &getScriptSystem() { return scriptSystem; }
 
   // Expose world for editor loops ---------------------------------------
-  flecs::world &ecs() { return world; }
-  const flecs::world &ecs() const { return world; }
+  flecs::world &ecs() { return *world; }
+  const flecs::world &ecs() const { return *world; }
 
 private:
   // Unique‑name helper
@@ -226,7 +234,7 @@ private:
   }
 
   // Flecs data ----------------------------------------------------------
-  flecs::world world;
+  std::unique_ptr<flecs::world> world;
 
   struct TimeSingleton {
     float time = 0.f;

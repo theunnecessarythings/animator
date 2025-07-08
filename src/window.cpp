@@ -115,10 +115,6 @@ MainWindow::MainWindow(QWidget *parent)
   createPropertiesDock();
   createTimelineDock();
   setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
-
-  connect(m_canvas, &SkiaCanvasWidget::sceneChanged, this,
-          [this] { m_sceneModel->refresh(); });
-
   onNewFile();
 }
 
@@ -216,7 +212,6 @@ void MainWindow::createSceneDock() {
   m_sceneTree = tree;
   sceneDock->setWidget(tree);
   addDockWidget(Qt::RightDockWidgetArea, sceneDock);
-
   connect(m_canvas, &SkiaCanvasWidget::sceneChanged, m_sceneModel,
           &SceneModel::refresh);
 
@@ -524,6 +519,8 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
                       QString::fromStdString(sc2.startFunction);
                   oldJson["updateFunction"] =
                       QString::fromStdString(sc2.updateFunction);
+                  oldJson["drawFunction"] =
+                      QString::fromStdString(sc2.drawFunction);
                   oldJson["destroyFunction"] =
                       QString::fromStdString(sc2.destroyFunction);
 
@@ -556,6 +553,8 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
                       QString::fromStdString(sc2.startFunction);
                   oldJson["updateFunction"] =
                       QString::fromStdString(sc2.updateFunction);
+                  oldJson["drawFunction"] =
+                      QString::fromStdString(sc2.drawFunction);
                   oldJson["destroyFunction"] =
                       QString::fromStdString(sc2.destroyFunction);
 
@@ -574,21 +573,14 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
         // Other fields
         auto makeEdit = [&](const QString &lbl, const std::string &initial,
-                            auto setter) {
+                            const QString &jsonKey) {
           auto *le = new QLineEdit(QString::fromStdString(initial));
           form->addRow(lbl, le);
           connect(
-              le, &QLineEdit::editingFinished, this,
-              [this, e, setter, le, lbl] {
+              le, &QLineEdit::editingFinished, this, [this, e, le, jsonKey] {
                 if (e.has<ScriptComponent>()) {
                   auto &sc2 = e.get_mut<ScriptComponent>();
                   std::string newValue = le->text().toStdString();
-
-                  if ((lbl == "Start" && newValue == sc2.startFunction) ||
-                      (lbl == "Update" && newValue == sc2.updateFunction) ||
-                      (lbl == "Destroy" && newValue == sc2.destroyFunction)) {
-                    return;
-                  }
 
                   QJsonObject oldJson;
                   oldJson["scriptPath"] =
@@ -597,20 +589,16 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
                       QString::fromStdString(sc2.startFunction);
                   oldJson["updateFunction"] =
                       QString::fromStdString(sc2.updateFunction);
+                  oldJson["drawFunction"] =
+                      QString::fromStdString(sc2.drawFunction);
                   oldJson["destroyFunction"] =
                       QString::fromStdString(sc2.destroyFunction);
 
-                  setter(sc2, newValue);
+                  if (newValue == oldJson[jsonKey].toString().toStdString())
+                    return;
 
                   QJsonObject newJson = oldJson;
-                  if (lbl == "Start")
-                    newJson["startFunction"] = QString::fromStdString(newValue);
-                  else if (lbl == "Update")
-                    newJson["updateFunction"] =
-                        QString::fromStdString(newValue);
-                  else if (lbl == "Destroy")
-                    newJson["destroyFunction"] =
-                        QString::fromStdString(newValue);
+                  newJson[jsonKey] = QString::fromStdString(newValue);
 
                   m_undoStack->push(new SetComponentCommand<ScriptComponent>(
                       this, e, oldJson, newJson));
@@ -618,12 +606,10 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
               });
         };
 
-        makeEdit("Start", sc.startFunction,
-                 [](auto &s, const std::string &v) { s.startFunction = v; });
-        makeEdit("Update", sc.updateFunction,
-                 [](auto &s, const std::string &v) { s.updateFunction = v; });
-        makeEdit("Destroy", sc.destroyFunction,
-                 [](auto &s, const std::string &v) { s.destroyFunction = v; });
+        makeEdit("Start", sc.startFunction, "startFunction");
+        makeEdit("Update", sc.updateFunction, "updateFunction");
+        makeEdit("Draw", sc.drawFunction, "drawFunction");
+        makeEdit("Destroy", sc.destroyFunction, "destroyFunction");
       });
 
   // ========================== Path Effect ===============================
@@ -741,8 +727,8 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
 
         // Visibility & update logic
         auto updateVisibility = [=](int index) {
-          auto type = typeCombo->itemData(index)
-                          .value<PathEffectComponent::Type>();
+          auto type =
+              typeCombo->itemData(index).value<PathEffectComponent::Type>();
           dashGroup->setVisible(type == PathEffectComponent::Type::Dash);
           cornerGroup->setVisible(type == PathEffectComponent::Type::Corner);
           discreteGroup->setVisible(type ==
@@ -791,6 +777,8 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
           QString::fromStdString(defaultInstance.startFunction);
       newJson["updateFunction"] =
           QString::fromStdString(defaultInstance.updateFunction);
+      newJson["drawFunction"] =
+          QString::fromStdString(defaultInstance.drawFunction);
       newJson["destroyFunction"] =
           QString::fromStdString(defaultInstance.destroyFunction);
       m_undoStack->push(new SetComponentCommand<ScriptComponent>(
@@ -852,22 +840,25 @@ void MainWindow::buildAttachableComponentEditor(
 
 void MainWindow::onNewFile() {
   m_undoStack->clear();
-  m_canvas->setSelectedEntities({});
-  m_canvas->scene().clear();
+  // m_canvas->setSelectedEntities({});
+  // m_canvas->scene().clear();
+  m_canvas->resetSceneAndDeserialize({});
+  m_sceneModel->setScene(&m_canvas->scene());
+  m_sceneModel->refresh();
   m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
 
   // Create bouncing ball entity
-  m_canvas->scene().createShape("Circle", 100, 100);
-
-  m_sceneModel->refresh();
+  // m_canvas->scene().createShape("Circle", 100, 100);
   m_canvas->update();
 
-  captureInitialScene();
+  // captureInitialScene();
+  // m_preSimulationState = QJsonObject();
+  // m_initialSceneJson = m_canvas->scene().serialize();
 }
 
 void MainWindow::onOpenFile() {
   m_undoStack->clear();
-  m_canvas->setSelectedEntities({});
+  // m_canvas->setSelectedEntities({});
   QString filePath = QFileDialog::getOpenFileName(this, tr("Open Scene"), {},
                                                   tr("Scene Files(*.json)"));
   if (filePath.isEmpty())
@@ -880,9 +871,14 @@ void MainWindow::onOpenFile() {
   }
 
   QJsonDocument doc(QJsonDocument::fromJson(loadFile.readAll()));
-  m_canvas->scene().deserialize(doc.object());
-  captureInitialScene();
+  // m_canvas->scene().deserialize(doc.object());
+  m_canvas->resetSceneAndDeserialize(doc.object());
+  m_sceneModel->setScene(&m_canvas->scene());
+  m_canvas->setSelectedEntities({});
+  // captureInitialScene();
   m_sceneModel->refresh();
+  // m_preSimulationState = QJsonObject();
+  // m_initialSceneJson = m_canvas->scene().serialize();
   m_canvas->update();
 }
 
@@ -1043,31 +1039,38 @@ void MainWindow::onStopResetButtonClicked() {
   m_isPlaying = false;
   m_playPauseButton->setText("Play");
   m_currentTime = 0.f;
-  m_canvas->setSelectedEntities({});
-
+  m_canvas->scene().getScriptSystem().resetEnvironments();
   if (!m_preSimulationState.isEmpty()) {
-    m_canvas->scene().deserialize(m_preSimulationState);
-    m_preSimulationState = QJsonObject(); // Clear the state
+    m_canvas->setCurrentTime(m_currentTime);
+    m_canvas->setSelectedEntities({});
+    onSceneSelectionChanged({}, {});
+    m_canvas->resetSceneAndDeserialize(m_preSimulationState);
   }
 
-  m_canvas->setCurrentTime(m_currentTime);
+  m_sceneModel->refresh();
   m_canvas->update();
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
-  m_sceneModel->refresh();
-  if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty())
-    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
-                            QItemSelection());
 }
 
 void MainWindow::onAnimationTimerTimeout() {
   m_currentTime += m_animationTimer->interval() / 1000.f;
   if (m_currentTime > m_animationDuration) {
+    m_canvas->scene().getScriptSystem().resetEnvironments();
     m_currentTime = 0.f;
-    m_canvas->setSelectedEntities({});
-    onSceneSelectionChanged({}, {});
     if (!m_preSimulationState.isEmpty()) {
-      m_canvas->scene().deserialize(m_preSimulationState);
+      m_animationTimer->stop();
+      m_isPlaying = false;
+      m_playPauseButton->setText("Play");
+      m_canvas->setCurrentTime(m_currentTime);
+      m_canvas->setSelectedEntities({});
+      onSceneSelectionChanged({}, {});
+      m_canvas->resetSceneAndDeserialize(m_preSimulationState);
+      m_sceneModel->refresh();
+      m_canvas->update();
+      m_timelineSlider->setValue(0);
+      updateTimeDisplay();
+      return;
     }
   }
 
@@ -1095,9 +1098,9 @@ void MainWindow::onPlayPauseButtonClicked() {
     m_playPauseButton->setText("Play");
   } else {
     // Play
-    if (m_preSimulationState.isEmpty()) {
-      m_preSimulationState = m_canvas->scene().serialize();
-    }
+    // if (m_currentTime == 0.f) {
+    //   m_preSimulationState = m_canvas->scene().serialize();
+    // }
     m_animationTimer->start();
     m_playPauseButton->setText("Pause");
   }
@@ -1119,12 +1122,5 @@ void MainWindow::syncTransformEditors(Entity e) {
     upd("rot", tr.rotation * 180.0 / M_PI);
     upd("sx", tr.sx);
     upd("sy", tr.sy);
-  }
-}
-
-void MainWindow::refreshProperties() {
-  if (m_sceneTree->selectionModel()->hasSelection()) {
-    onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
-                            QItemSelection());
   }
 }

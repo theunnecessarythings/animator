@@ -43,7 +43,6 @@ public:
       applyJsonToEntity(m_mainWindow->canvas()->scene().ecs(), m_entity,
                         wrapper, false);
     }
-    m_mainWindow->refreshProperties();
   }
 
   void redo() override {
@@ -56,7 +55,6 @@ public:
       applyJsonToEntity(m_mainWindow->canvas()->scene().ecs(), m_entity,
                         wrapper, false);
     }
-    m_mainWindow->refreshProperties();
   }
 
   void updateEntityIds(const QMap<qint64, Entity> &idMap) override {
