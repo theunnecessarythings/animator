@@ -60,6 +60,7 @@ private slots:
   void onNewFile();
   void onOpenFile();
   void onSaveFile();
+  void onRenderVideo();
 
   // Transform updates propagated from canvas
   void onTransformChanged(Entity entity);

@@ -48,6 +48,8 @@ public:
   void setSelectedEntities(const QList<Entity> &entities);
   void resetSceneAndDeserialize(const QJsonObject &json);
 
+  void setVideoRendering(bool isRendering);
+
 protected:
   // -------------------------------------------------------------------------
   //  Geometry helpers
@@ -125,6 +127,7 @@ private:
   QList<Entity> selectedEntities_;
   bool isDragging_ = false, isRotating_ = false, isMarqueeSelecting_ = false;
   bool m_isSceneBeingReset = false;
+  bool m_isRenderingVideo = false;
   QPointF dragStart_, marqueeStartPoint_, marqueeEndPoint_;
   float currentTime_ = 0.f;
   QMap<Entity, TransformData> initialTransforms_;

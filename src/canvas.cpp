@@ -16,9 +16,13 @@ void SkiaCanvasWidget::setSelectedEntities(const QList<Entity> &entities) {
 }
 
 void SkiaCanvasWidget::resetSceneAndDeserialize(const QJsonObject &json) {
-  scene_ = std::make_unique<Scene>();
+  scene_->clear();
   if (!json.isEmpty())
     scene_->deserialize(json);
+}
+
+void SkiaCanvasWidget::setVideoRendering(bool isRendering) {
+  m_isRenderingVideo = isRendering;
 }
 
 // -------------------------------------------------------------------------
@@ -79,8 +83,10 @@ void SkiaCanvasWidget::paintGL() {
   scene_->draw(c, currentTime_);
 
   // Selection overlays -----------------------------------------------
-  drawSelection(c);
-  drawMarquee(c);
+  if (!m_isRenderingVideo) {
+    drawSelection(c);
+    drawMarquee(c);
+  }
 
   fContext->flushAndSubmit();
 }

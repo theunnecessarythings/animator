@@ -45,6 +45,8 @@ public:
 
   ScriptSystem &getScriptSystem() { return scriptSystem; }
 
+  RenderSystem &getRenderer() { return renderer; }
+
   // Expose world for editor loops ---------------------------------------
   flecs::world &ecs() { return *world; }
   const flecs::world &ecs() const { return *world; }

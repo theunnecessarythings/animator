@@ -11,6 +11,9 @@
 #include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
+#include <QMessageBox>
+#include <QProcess>
+#include <QProgressDialog>
 
 Q_DECLARE_METATYPE(PathEffectComponent::Type);
 
@@ -139,6 +142,8 @@ void MainWindow::createMenus() {
   fileMenu->addAction(tr("&New"), this, &MainWindow::onNewFile);
   fileMenu->addAction(tr("&Open…"), this, &MainWindow::onOpenFile);
   fileMenu->addAction(tr("&Save"), this, &MainWindow::onSaveFile);
+  fileMenu->addSeparator();
+  fileMenu->addAction(tr("Render Video..."), this, &MainWindow::onRenderVideo);
   fileMenu->addSeparator();
   fileMenu->addAction(tr("E&xit"), qApp, &QCoreApplication::quit);
 
@@ -880,25 +885,21 @@ void MainWindow::buildAttachableComponentEditor(
 void MainWindow::onNewFile() {
   m_canvas->setSceneResetting(true);
   m_undoStack->clear();
+  m_fileWatcher->removePaths(m_fileWatcher->files());
   m_canvas->setSelectedEntities({});
   m_canvas->resetSceneAndDeserialize({});
   m_sceneModel->setScene(&m_canvas->scene());
   m_sceneModel->refresh();
   m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
 
-  // Create bouncing ball entity
-  // m_canvas->scene().createShape("Circle", 100, 100);
-
-  // captureInitialScene();
-  // m_preSimulationState = QJsonObject();
-  // m_initialSceneJson = m_canvas->scene().serialize();
-  m_canvas->setSceneResetting(false);
   m_canvas->update();
+  m_canvas->setSceneResetting(false);
 }
 
 void MainWindow::onOpenFile() {
   m_canvas->setSceneResetting(true);
   m_undoStack->clear();
+  m_fileWatcher->removePaths(m_fileWatcher->files());
   QString filePath = QFileDialog::getOpenFileName(this, tr("Open Scene"), {},
                                                   tr("Scene Files(*.json)"));
   if (filePath.isEmpty()) {
@@ -918,10 +919,8 @@ void MainWindow::onOpenFile() {
   m_canvas->resetSceneAndDeserialize(doc.object());
   m_sceneModel->setScene(&m_canvas->scene());
   m_sceneModel->refresh();
-  // m_preSimulationState = QJsonObject();
-  // m_initialSceneJson = m_canvas->scene().serialize();
-  m_canvas->setSceneResetting(false);
   m_canvas->update();
+  m_canvas->setSceneResetting(false);
 }
 
 void MainWindow::onSaveFile() {
@@ -948,6 +947,133 @@ void MainWindow::resetScene() {
   if (!m_sceneTree->selectionModel()->selectedIndexes().isEmpty())
     onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
                             QItemSelection());
+}
+
+void MainWindow::onRenderVideo() {
+  QString videoPath = QFileDialog::getSaveFileName(
+      this, tr("Render Video"), "", tr("MP4 Video (*.mp4)"));
+  if (videoPath.isEmpty()) {
+    return;
+  }
+
+  // Ensure the filename has the .mp4 extension
+  if (!videoPath.endsWith(".mp4", Qt::CaseInsensitive)) {
+    videoPath += ".mp4";
+  }
+
+  // Settings
+  const int fps = 60;
+  const float duration = m_animationDuration;
+  const int width = m_canvas->width();
+  const int height = m_canvas->height();
+  const int totalFrames = static_cast<int>(duration * fps);
+
+  if (totalFrames <= 0) {
+    QMessageBox::warning(this, tr("Warning"),
+                         tr("Animation duration is zero. Nothing to render."));
+    return;
+  }
+
+  // Save current state and reset for rendering
+  QJsonObject sceneState = m_canvas->scene().serialize();
+  auto selectionState = m_selectedEntities;
+
+  // Prepare for rendering
+  m_animationTimer->stop();
+  m_isPlaying = false;
+  m_playPauseButton->setText("Play");
+  m_currentTime = 0.f;
+  m_canvas->scene().getScriptSystem().resetEnvironments();
+  m_canvas->setCurrentTime(m_currentTime);
+  m_timelineSlider->setValue(0);
+  updateTimeDisplay();
+  m_canvas->update();
+  qApp->processEvents();
+
+  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames, this);
+  progress.setWindowModality(Qt::WindowModal);
+
+  // Setup ffmpeg
+  QString ffmpegPath = "ffmpeg"; // Assume ffmpeg is in PATH
+  QStringList args;
+  args << "-y"
+       << "-f"
+       << "rawvideo"
+       << "-pix_fmt"
+       << "rgba"
+       << "-s"
+       << QString("%1x%2").arg(width).arg(height)
+       << "-r"
+       << QString::number(fps)
+       << "-i"
+       << "-" // Input from stdin
+       << "-vf"
+       << "crop=trunc(iw/2)*2:trunc(ih/2)*2"
+       << "-c:v"
+       << "libx264"
+       << "-pix_fmt"
+       << "yuv420p" << videoPath;
+
+  QProcess ffmpegProcess;
+  ffmpegProcess.start(ffmpegPath, args);
+  if (!ffmpegProcess.waitForStarted()) {
+    QMessageBox::critical(
+        this, "Error",
+        "Could not start ffmpeg. Is it installed and in your PATH?");
+    m_canvas->resetSceneAndDeserialize(sceneState); // Restore
+    return;
+  }
+
+  m_canvas->setVideoRendering(true);
+
+  for (int i = 0; i < totalFrames; ++i) {
+    progress.setValue(i);
+    if (progress.wasCanceled()) {
+      break;
+    }
+    qApp->processEvents();
+
+    float currentTime = static_cast<float>(i) / fps;
+
+    // Update scene for the frame
+    m_canvas->setCurrentTime(currentTime);
+    m_canvas->scene().getScriptSystem().tick(1.0f / fps, currentTime);
+    m_canvas->update();
+
+    // Force the widget to repaint immediately and grab the frame
+    qApp->processEvents();
+    QImage frame = m_canvas->grabFramebuffer();
+
+    if (frame.isNull()) {
+      qWarning() << "Failed to grab framebuffer for frame" << i;
+      continue;
+    }
+
+    // Ensure RGBA format for ffmpeg stdin
+    QImage convertedFrame = frame.convertToFormat(QImage::Format_RGBA8888);
+    ffmpegProcess.write(
+        reinterpret_cast<const char *>(convertedFrame.constBits()),
+        convertedFrame.sizeInBytes());
+  }
+
+  m_canvas->setVideoRendering(false);
+  progress.setValue(totalFrames);
+
+  ffmpegProcess.closeWriteChannel();
+  if (!ffmpegProcess.waitForFinished(30000)) { // 30s timeout
+    ffmpegProcess.kill();
+    QMessageBox::critical(this, "Error",
+                          "ffmpeg timed out or failed to finish.");
+    qWarning() << "ffmpeg stderr:" << ffmpegProcess.readAllStandardError();
+  } else {
+    QMessageBox::information(this, "Success", "Video rendering complete.");
+  }
+
+  // Restore original scene state
+  m_canvas->resetSceneAndDeserialize(sceneState);
+  m_canvas->setSelectedEntities(selectionState);
+  m_sceneModel->refresh();
+  m_canvas->update();
 }
 
 void MainWindow::onCut() {

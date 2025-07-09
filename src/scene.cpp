@@ -1,4 +1,5 @@
 #include "scene.h"
+#include "ecs.h"
 
 Entity Scene::createShape(const std::string &kind, float x, float y) {
   Entity e = world->entity();
@@ -164,10 +165,8 @@ void Scene::deserialize(const QJsonObject &root) {
         e.set<ScriptComponent>({j["scriptPath"].toString().toStdString(),
                                 j["startFunction"].toString().toStdString(),
                                 j["updateFunction"].toString().toStdString(),
-                                j.contains("drawFunction")
-                                    ? j["drawFunction"].toString().toStdString()
-                                    : "on_draw",
                                 j["destroyFunction"].toString().toStdString(),
+                                j["drawFunction"].toString().toStdString(),
                                 {}}); // env filled on OnAdd
       }
 
@@ -188,6 +187,6 @@ void Scene::deserialize(const QJsonObject &root) {
 }
 
 void Scene::clear() {
-  world.reset(new flecs::world());
+  world->delete_with<NameComponent>();
   kindCounters.clear();
 }
