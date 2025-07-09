@@ -106,6 +106,7 @@ signals:
   void transformationCompleted(Entity entity, float oldX, float oldY,
                                float oldRot, float newX, float newY,
                                float newRot);
+  void entityAdded(Entity entity);
   void dragStarted();
   void dragEnded();
 

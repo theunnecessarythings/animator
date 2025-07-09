@@ -110,6 +110,7 @@ void SkiaCanvasWidget::dropEvent(QDropEvent *e) {
   e->acceptProposedAction();
 
   auto ent = scene_->createShape(id.toStdString(), pos.x(), pos.y());
+  emit entityAdded(ent);
   emit sceneChanged();
   setSelectedEntity(ent);
 }

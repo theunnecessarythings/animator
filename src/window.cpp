@@ -6,14 +6,14 @@
 #include <QAction>
 #include <QComboBox>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaProperty>
 #include <QMetaType>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
-#include <QMessageBox>
-#include <QProcess>
-#include <QProgressDialog>
 
 Q_DECLARE_METATYPE(PathEffectComponent::Type);
 
@@ -236,6 +236,10 @@ void MainWindow::createSceneDock() {
           [this] { m_isDragging = true; });
   connect(m_canvas, &SkiaCanvasWidget::dragEnded, this,
           [this] { m_isDragging = false; });
+
+  connect(m_canvas, &SkiaCanvasWidget::entityAdded, this, [this](Entity e) {
+    m_undoStack->push(new AddEntityCommand(this, e));
+  });
 }
 
 void MainWindow::createPropertiesDock() {
@@ -369,32 +373,55 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     addSpin(
         "X", "tx", [tc] { return tc.x; },
         [this, e](double v) {
-          e.get_mut<TransformComponent>().x = v;
+          auto &tc = e.get_mut<TransformComponent>();
+          auto oldX = tc.x;
+          tc.x = v;
+          m_undoStack->push(new ChangeTransformCommand(
+              this, e, oldX, tc.y, tc.rotation, tc.sx, tc.sy, tc.x, tc.y,
+              tc.rotation, tc.sx, tc.sy));
           m_canvas->update();
         });
     addSpin(
         "Y", "ty", [tc] { return tc.y; },
         [this, e](double v) {
-          e.get_mut<TransformComponent>().y = v;
+          auto &tc = e.get_mut<TransformComponent>();
+          auto oldY = tc.y;
+          tc.y = v;
+          m_undoStack->push(new ChangeTransformCommand(
+              this, e, tc.x, oldY, tc.rotation, tc.sx, tc.sy, tc.x, tc.y,
+              tc.rotation, tc.sx, tc.sy));
           m_canvas->update();
         });
     addSpin(
         "Rotation", "rot", [tc] { return tc.rotation * 180 / M_PI; },
         [this, e](double v) {
-          e.get_mut<TransformComponent>().rotation = v * M_PI / 180;
+          auto &tc = e.get_mut<TransformComponent>();
+          auto oldRotation = tc.rotation;
+          tc.rotation = v * M_PI / 180;
+          m_undoStack->push(new ChangeTransformCommand(
+              this, e, tc.x, tc.y, oldRotation, tc.sx, tc.sy, tc.x, tc.y,
+              tc.rotation, tc.sx, tc.sy));
           m_canvas->update();
         });
     addSpin(
         "Scale X", "sx", [tc] { return tc.sx; },
         [this, e](double v) {
-          e.get_mut<TransformComponent>().sx = v;
-          m_canvas->update();
+          auto &tc = e.get_mut<TransformComponent>();
+          auto oldSx = tc.sx;
+          tc.sx = v;
+          m_undoStack->push(new ChangeTransformCommand(
+              this, e, tc.x, tc.y, tc.rotation, oldSx, tc.sy, tc.x, tc.y,
+              tc.rotation, tc.sx, tc.sy));
         });
     addSpin(
         "Scale Y", "sy", [tc] { return tc.sy; },
         [this, e](double v) {
-          e.get_mut<TransformComponent>().sy = v;
-          m_canvas->update();
+          auto &tc = e.get_mut<TransformComponent>();
+          auto oldSy = tc.sy;
+          tc.sy = v;
+          m_undoStack->push(new ChangeTransformCommand(
+              this, e, tc.x, tc.y, tc.rotation, tc.sx, oldSy, tc.x, tc.y,
+              tc.rotation, tc.sx, tc.sy));
         });
     m_propsLayout->addRow(grp);
   }
@@ -478,13 +505,31 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
         auto *entrySB = makeSpinBox<QDoubleSpinBox>(
             this, 0, 1000, 0.1, [&ac] { return ac.entryTime; },
             [this, e](double v) {
-              e.get_mut<AnimationComponent>().entryTime = v;
+              auto &anim = e.get_mut<AnimationComponent>();
+              QJsonObject oldJson;
+              oldJson["entryTime"] = anim.entryTime;
+              oldJson["exitTime"] = anim.exitTime;
+              anim.entryTime = v;
+              QJsonObject newJson = oldJson;
+              newJson["entryTime"] = anim.entryTime;
+              newJson["exitTime"] = anim.exitTime;
+              m_undoStack->push(new SetComponentCommand<AnimationComponent>(
+                  this, e, oldJson, newJson));
               m_canvas->update();
             });
         auto *exitSB = makeSpinBox<QDoubleSpinBox>(
             this, 0, 1000, 0.1, [&ac] { return ac.exitTime; },
             [this, e](double v) {
-              e.get_mut<AnimationComponent>().exitTime = v;
+              auto &anim = e.get_mut<AnimationComponent>();
+              QJsonObject oldJson;
+              oldJson["entryTime"] = anim.entryTime;
+              oldJson["exitTime"] = anim.exitTime;
+              anim.exitTime = v;
+              QJsonObject newJson = oldJson;
+              newJson["entryTime"] = anim.entryTime;
+              newJson["exitTime"] = anim.exitTime;
+              m_undoStack->push(new SetComponentCommand<AnimationComponent>(
+                  this, e, oldJson, newJson));
               m_canvas->update();
             });
         form->addRow("Entry", entrySB);
@@ -950,8 +995,8 @@ void MainWindow::resetScene() {
 }
 
 void MainWindow::onRenderVideo() {
-  QString videoPath = QFileDialog::getSaveFileName(
-      this, tr("Render Video"), "", tr("MP4 Video (*.mp4)"));
+  QString videoPath = QFileDialog::getSaveFileName(this, tr("Render Video"), "",
+                                                   tr("MP4 Video (*.mp4)"));
   if (videoPath.isEmpty()) {
     return;
   }
@@ -990,7 +1035,8 @@ void MainWindow::onRenderVideo() {
   m_canvas->update();
   qApp->processEvents();
 
-  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames, this);
+  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames,
+                           this);
   progress.setWindowModality(Qt::WindowModal);
 
   // Setup ffmpeg
@@ -1001,11 +1047,8 @@ void MainWindow::onRenderVideo() {
        << "rawvideo"
        << "-pix_fmt"
        << "rgba"
-       << "-s"
-       << QString("%1x%2").arg(width).arg(height)
-       << "-r"
-       << QString::number(fps)
-       << "-i"
+       << "-s" << QString("%1x%2").arg(width).arg(height) << "-r"
+       << QString::number(fps) << "-i"
        << "-" // Input from stdin
        << "-vf"
        << "crop=trunc(iw/2)*2:trunc(ih/2)*2"
