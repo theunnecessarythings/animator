@@ -25,6 +25,49 @@ void SkiaCanvasWidget::setVideoRendering(bool isRendering) {
   m_isRenderingVideo = isRendering;
 }
 
+QImage SkiaCanvasWidget::renderHighResFrame(int width, int height, float time) {
+  auto imageInfo =
+      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(imageInfo);
+  if (!surface) {
+    qWarning() << "Failed to create offscreen SkSurface for rendering.";
+    return QImage();
+  }
+  SkCanvas *canvas = surface->getCanvas();
+
+  // Prepare canvas (clear, scale)
+  canvas->clear(SK_ColorWHITE);
+
+  // Calculate scale factor to fit and preserve aspect ratio
+  float canvasWidth = this->width();
+  float canvasHeight = this->height();
+  float scale = std::min((float)width / canvasWidth, (float)height / canvasHeight);
+
+  // Calculate offsets to center the scaled content
+  float scaledWidth = canvasWidth * scale;
+  float scaledHeight = canvasHeight * scale;
+  float offsetX = (width - scaledWidth) / 2.0f;
+  float offsetY = (height - scaledHeight) / 2.0f;
+
+  // Apply transformations
+  canvas->translate(offsetX, offsetY);
+  canvas->scale(scale, scale);
+
+  // Draw the scene
+  scene_->draw(canvas, time);
+
+  // Get pixels back
+  QImage image(width, height, QImage::Format_RGBA8888);
+  SkPixmap pixmap(imageInfo, image.bits(), image.bytesPerLine());
+
+  if (!surface->readPixels(pixmap, 0, 0)) {
+    qWarning() << "Failed to read pixels from offscreen SkSurface.";
+    return QImage();
+  }
+
+  return image;
+}
+
 // -------------------------------------------------------------------------
 //  QOpenGLWidget overrides
 // -------------------------------------------------------------------------

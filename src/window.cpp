@@ -11,6 +11,7 @@
 #include <QMetaType>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QInputDialog>
 #include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
@@ -995,8 +996,40 @@ void MainWindow::resetScene() {
 }
 
 void MainWindow::onRenderVideo() {
-  QString videoPath = QFileDialog::getSaveFileName(this, tr("Render Video"), "",
-                                                   tr("MP4 Video (*.mp4)"));
+  // Get resolution from user
+  bool ok;
+  QStringList items;
+  items << QString("Current (%1x%2)")
+               .arg(m_canvas->width())
+               .arg(m_canvas->height())
+        << "HD (1280x720)"
+        << "Full HD (1920x1080)"
+        << "4K (3840x2160)";
+  QString item = QInputDialog::getItem(this, tr("Select Render Resolution"),
+                                       tr("Resolution:"), items, 0, false, &ok);
+  if (!ok || item.isEmpty()) {
+    return; // User cancelled
+  }
+
+  int targetWidth, targetHeight;
+  if (item.startsWith("Current")) {
+    targetWidth = m_canvas->width();
+    targetHeight = m_canvas->height();
+  } else if (item.startsWith("HD")) {
+    targetWidth = 1280;
+    targetHeight = 720;
+  } else if (item.startsWith("Full HD")) {
+    targetWidth = 1920;
+    targetHeight = 1080;
+  } else if (item.startsWith("4K")) {
+    targetWidth = 3840;
+    targetHeight = 2160;
+  } else {
+    return; // Should not happen
+  }
+
+  QString videoPath = QFileDialog::getSaveFileName(
+      this, tr("Render Video"), "", tr("MP4 Video (*.mp4)"));
   if (videoPath.isEmpty()) {
     return;
   }
@@ -1009,8 +1042,6 @@ void MainWindow::onRenderVideo() {
   // Settings
   const int fps = 60;
   const float duration = m_animationDuration;
-  const int width = m_canvas->width();
-  const int height = m_canvas->height();
   const int totalFrames = static_cast<int>(duration * fps);
 
   if (totalFrames <= 0) {
@@ -1032,11 +1063,8 @@ void MainWindow::onRenderVideo() {
   m_canvas->setCurrentTime(m_currentTime);
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
-  m_canvas->update();
-  qApp->processEvents();
 
-  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames,
-                           this);
+  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames, this);
   progress.setWindowModality(Qt::WindowModal);
 
   // Setup ffmpeg
@@ -1047,8 +1075,11 @@ void MainWindow::onRenderVideo() {
        << "rawvideo"
        << "-pix_fmt"
        << "rgba"
-       << "-s" << QString("%1x%2").arg(width).arg(height) << "-r"
-       << QString::number(fps) << "-i"
+       << "-s"
+       << QString("%1x%2").arg(targetWidth).arg(targetHeight)
+       << "-r"
+       << QString::number(fps)
+       << "-i"
        << "-" // Input from stdin
        << "-vf"
        << "crop=trunc(iw/2)*2:trunc(ih/2)*2"
@@ -1079,24 +1110,19 @@ void MainWindow::onRenderVideo() {
     float currentTime = static_cast<float>(i) / fps;
 
     // Update scene for the frame
-    m_canvas->setCurrentTime(currentTime);
     m_canvas->scene().getScriptSystem().tick(1.0f / fps, currentTime);
-    m_canvas->update();
 
-    // Force the widget to repaint immediately and grab the frame
-    qApp->processEvents();
-    QImage frame = m_canvas->grabFramebuffer();
+    // Render the high-resolution frame offscreen
+    QImage frame =
+        m_canvas->renderHighResFrame(targetWidth, targetHeight, currentTime);
 
     if (frame.isNull()) {
-      qWarning() << "Failed to grab framebuffer for frame" << i;
+      qWarning() << "Failed to render high-res frame" << i;
       continue;
     }
 
-    // Ensure RGBA format for ffmpeg stdin
-    QImage convertedFrame = frame.convertToFormat(QImage::Format_RGBA8888);
-    ffmpegProcess.write(
-        reinterpret_cast<const char *>(convertedFrame.constBits()),
-        convertedFrame.sizeInBytes());
+    ffmpegProcess.write(reinterpret_cast<const char *>(frame.constBits()),
+                        frame.sizeInBytes());
   }
 
   m_canvas->setVideoRendering(false);

@@ -50,6 +50,8 @@ public:
 
   void setVideoRendering(bool isRendering);
 
+  QImage renderHighResFrame(int width, int height, float time);
+
 protected:
   // -------------------------------------------------------------------------
   //  Geometry helpers
