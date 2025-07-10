@@ -18,6 +18,10 @@ template <>
 const char *SceneCommand::getComponentJsonKey<PathEffectComponent>() {
   return "PathEffectComponent";
 }
+template <>
+const char *SceneCommand::getComponentJsonKey<CppScriptComponent>() {
+  return "CppScriptComponent";
+}
 
 static inline QJsonObject snapshotEntity(Scene &scene, Entity e) {
   return serializeEntity(scene, e);
@@ -82,6 +86,10 @@ void applyJsonToEntity(flecs::world &world, flecs::entity e,
                                 : "on_draw",
                             j["destroyFunction"].toString().toStdString(),
                             {}});
+  }
+  if (o.contains("CppScriptComponent")) {
+    const QJsonObject j = o["CppScriptComponent"].toObject();
+    e.set<CppScriptComponent>({j["source_path"].toString().toStdString()});
   }
   if (o.contains("PathEffectComponent")) {
     const QJsonObject peJson = o["PathEffectComponent"].toObject();

@@ -62,6 +62,14 @@ inline QJsonObject serializeEntity(const Scene &, Entity e) {
     o["ScriptComponent"] = j;
   }
 
+  // CppScript -------------------------------------------------------------
+  if (e.has<CppScriptComponent>()) {
+    auto &s = e.get<CppScriptComponent>();
+    QJsonObject j;
+    j["source_path"] = QString::fromStdString(s.source_path);
+    o["CppScriptComponent"] = j;
+  }
+
   // Path Effect ----------------------------------------------------------
   if (e.has<PathEffectComponent>()) {
     auto &pe = e.get<PathEffectComponent>();

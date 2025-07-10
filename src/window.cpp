@@ -5,13 +5,13 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaProperty>
 #include <QMetaType>
 #include <QProcess>
 #include <QProgressDialog>
-#include <QInputDialog>
 #include <QScrollArea>
 #include <QtMath>
 #include <type_traits>
@@ -702,6 +702,107 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
         }
       });
 
+  // ======================= CppScriptComponent ========================
+  buildAttachableComponentEditor<CppScriptComponent>(
+      e, tr("C++ Script"),
+      [this, e](QFormLayout *form, CppScriptComponent &csc) {
+        // Path
+        {
+          auto *pathWidget = new QWidget();
+          auto *pathLayout = new QHBoxLayout(pathWidget);
+          pathLayout->setContentsMargins(0, 0, 0, 0);
+          pathLayout->setSpacing(4);
+
+          auto *pathEdit =
+              new QLineEdit(QString::fromStdString(csc.source_path));
+          pathLayout->addWidget(pathEdit);
+
+          auto *browseBtn = new QPushButton("...");
+          browseBtn->setFixedWidth(
+              browseBtn->fontMetrics().horizontalAdvance("...") + 10);
+          pathLayout->addWidget(browseBtn);
+
+          form->addRow("Source Path", pathWidget);
+
+          connect(
+              pathEdit, &QLineEdit::editingFinished, this, [this, e, pathEdit] {
+                if (e.has<CppScriptComponent>()) {
+                  auto &csc2 = e.get_mut<CppScriptComponent>();
+                  std::string oldValue = csc2.source_path;
+                  std::string newValue = pathEdit->text().toStdString();
+
+                  if (newValue == csc2.source_path)
+                    return;
+
+                  QJsonObject oldJson;
+                  oldJson["source_path"] =
+                      QString::fromStdString(csc2.source_path);
+
+                  csc2.source_path = newValue;
+
+                  QJsonObject newJson = oldJson;
+                  newJson["source_path"] = QString::fromStdString(newValue);
+
+                  m_undoStack->push(new SetComponentCommand<CppScriptComponent>(
+                      this, e, oldJson, newJson));
+
+                  // Update file watcher
+                  if (!oldValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(oldValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->removePath(abs_path);
+                  }
+                  if (!newValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(newValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->addPath(abs_path);
+                  }
+                }
+              });
+
+          connect(browseBtn, &QPushButton::clicked, this, [this, e, pathEdit] {
+            QString filePath = QFileDialog::getOpenFileName(
+                this, tr("Open C++ Script"), "../scripts",
+                tr("C++ Files (*.cpp);;All Files (*)"));
+            if (!filePath.isEmpty()) {
+              QDir executableDir(QCoreApplication::applicationDirPath());
+              QString relativePath = executableDir.relativeFilePath(filePath);
+              pathEdit->setText(relativePath);
+              if (e.has<CppScriptComponent>()) {
+                auto &csc2 = e.get_mut<CppScriptComponent>();
+                std::string oldValue = csc2.source_path;
+                std::string newValue = relativePath.toStdString();
+                if (newValue != csc2.source_path) {
+                  QJsonObject oldJson;
+                  oldJson["source_path"] =
+                      QString::fromStdString(csc2.source_path);
+                  csc2.source_path = newValue;
+
+                  QJsonObject newJson = oldJson;
+                  newJson["source_path"] = QString::fromStdString(newValue);
+
+                  m_undoStack->push(new SetComponentCommand<CppScriptComponent>(
+                      this, e, oldJson, newJson));
+                  // Update file watcher
+                  qDebug() << "Adding file watcher for"
+                           << QString::fromStdString(newValue);
+                  if (!oldValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(oldValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->removePath(abs_path);
+                  }
+                  if (!newValue.empty()) {
+                    auto abs_path = QFileInfo(QString::fromStdString(newValue))
+                                        .absoluteFilePath();
+                    m_fileWatcher->addPath(abs_path);
+                  }
+                }
+              }
+            }
+          });
+        }
+      });
+
   // ========================== Path Effect ===============================
   buildAttachableComponentEditor<PathEffectComponent>(
       e, tr("Path Effect"),
@@ -876,6 +977,21 @@ void MainWindow::onSceneSelectionChanged(const QItemSelection &sel,
     });
   }
 
+  if (!e.has<CppScriptComponent>()) {
+    QAction *addCppScriptAction = addComponentMenu->addAction(tr("C++ Script"));
+    connect(addCppScriptAction, &QAction::triggered, this, [this, e] {
+      CppScriptComponent defaultInstance;
+      QJsonObject newJson;
+      newJson["source_path"] =
+          QString::fromStdString(defaultInstance.source_path);
+      m_undoStack->push(new SetComponentCommand<CppScriptComponent>(
+          this, e, QJsonObject(), newJson));
+      // Manually refresh the properties panel to show the new component
+      onSceneSelectionChanged(m_sceneTree->selectionModel()->selection(),
+                              QItemSelection());
+    });
+  }
+
   if (!e.has<PathEffectComponent>()) {
     QAction *addPathEffectAction =
         addComponentMenu->addAction(tr("Path Effect"));
@@ -1028,8 +1144,8 @@ void MainWindow::onRenderVideo() {
     return; // Should not happen
   }
 
-  QString videoPath = QFileDialog::getSaveFileName(
-      this, tr("Render Video"), "", tr("MP4 Video (*.mp4)"));
+  QString videoPath = QFileDialog::getSaveFileName(this, tr("Render Video"), "",
+                                                   tr("MP4 Video (*.mp4)"));
   if (videoPath.isEmpty()) {
     return;
   }
@@ -1064,7 +1180,8 @@ void MainWindow::onRenderVideo() {
   m_timelineSlider->setValue(0);
   updateTimeDisplay();
 
-  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames, this);
+  QProgressDialog progress("Rendering video...", "Cancel", 0, totalFrames,
+                           this);
   progress.setWindowModality(Qt::WindowModal);
 
   // Setup ffmpeg
@@ -1075,11 +1192,8 @@ void MainWindow::onRenderVideo() {
        << "rawvideo"
        << "-pix_fmt"
        << "rgba"
-       << "-s"
-       << QString("%1x%2").arg(targetWidth).arg(targetHeight)
-       << "-r"
-       << QString::number(fps)
-       << "-i"
+       << "-s" << QString("%1x%2").arg(targetWidth).arg(targetHeight) << "-r"
+       << QString::number(fps) << "-i"
        << "-" // Input from stdin
        << "-vf"
        << "crop=trunc(iw/2)*2:trunc(ih/2)*2"
@@ -1315,6 +1429,9 @@ void MainWindow::onAnimationTimerTimeout() {
   m_canvas->scene().getScriptSystem().tick(
       m_animationTimer->interval() / 1000.f, m_currentTime);
 
+  m_canvas->scene().update(m_animationTimer->interval() / 1000.f,
+                           m_currentTime);
+
   m_canvas->update();
 
   m_timelineSlider->setValue(static_cast<int>(m_currentTime * 100));
@@ -1364,8 +1481,20 @@ void MainWindow::syncTransformEditors(Entity e) {
 
 void MainWindow::onScriptFileChanged(const QString &path) {
   qDebug() << "Script file changed:" << path;
-  auto &ss = m_canvas->scene().getScriptSystem();
-  ss.reloadScript(path.toStdString());
+
+  if (path.endsWith(".lua")) {
+    auto &ss = m_canvas->scene().getScriptSystem();
+    ss.reloadScript(path.toStdString());
+  } else if (path.endsWith(".cpp")) {
+    auto &scene = m_canvas->scene();
+    flecs::entity e = scene.findEntityByCppScriptPath(path.toStdString());
+    if (e.is_valid()) {
+      // Re-set the component to trigger the OnSet observer, which will
+      // recompile and reload the script.
+      e.set<CppScriptComponent>({path.toStdString()});
+    }
+  }
+
   onStopResetButtonClicked();
   onPlayPauseButtonClicked();
 }

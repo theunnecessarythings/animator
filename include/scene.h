@@ -1,8 +1,14 @@
 #pragma once
 
 #include "ecs.h"
+#include "qglobal.h"
 #include "render.h"
 #include "scripting.h"
+
+#include "cpp_script_interface.h"
+
+#include <dlfcn.h>
+#include <iostream>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -12,11 +18,7 @@
 
 class Scene {
 public:
-  Scene()
-      : world(std::make_unique<flecs::world>()), scriptingEngine(*world),
-        scriptSystem(*world, scriptingEngine), renderer(*world, scriptSystem) {
-    world->set<TimeSingleton>({0.f});
-  }
+  Scene();
 
   ~Scene() { world.reset(); }
 
@@ -26,6 +28,8 @@ public:
   Entity createShape(const std::string &kind, float x, float y);
 
   Entity createBackground(float width, float height);
+
+  void attachCppScript(flecs::entity e, std::string path);
 
   // ---------------------------------------------------------------------
   //  Frame tick helpers
@@ -50,6 +54,17 @@ public:
   // Expose world for editor loops ---------------------------------------
   flecs::world &ecs() { return *world; }
   const flecs::world &ecs() const { return *world; }
+
+  // Find an entity by its C++ script path
+  flecs::entity findEntityByCppScriptPath(const std::string &path) {
+    flecs::entity result;
+    world->each<CppScriptComponent>([&](flecs::entity e, CppScriptComponent &s) {
+      if (s.source_path == path) {
+        result = e;
+      }
+    });
+    return result;
+  }
 
 private:
   // Unique‑name helper

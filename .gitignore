@@ -4,3 +4,4 @@ build/
 lua-5.4.8/
 README.md
 concat.py
+include/script_pch.h.gch

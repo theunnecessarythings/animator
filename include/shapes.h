@@ -1,6 +1,8 @@
 #pragma once
 
-#include "ecs.h"
+// Forward declarations to break circular dependency with ecs.h
+struct MaterialComponent;
+struct PathEffectComponent;
 
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -40,48 +42,7 @@ public:
   virtual ~Shape() = default;
 
   void render(SkCanvas *canvas, const MaterialComponent &material,
-              const PathEffectComponent *pathEffect = nullptr) const {
-    if (m_isDirty) {
-      rebuildPaths();
-      m_isDirty = false;
-    }
-
-    for (const auto &styledPath : m_paths) {
-      SkPaint paint;
-      paint.setAntiAlias(material.antiAliased);
-      paint.setColor(material.color);
-      paint.setStrokeWidth(material.strokeWidth);
-
-      if (pathEffect) {
-        paint.setPathEffect(pathEffect->makePathEffect());
-      }
-
-      // Apply material properties
-      if (material.isFilled && material.isStroked) {
-        paint.setStyle(SkPaint::kStrokeAndFill_Style);
-      } else if (material.isFilled) {
-        paint.setStyle(SkPaint::kFill_Style);
-      } else if (material.isStroked) {
-        paint.setStyle(SkPaint::kStroke_Style);
-      }
-
-      // Override path style if specified
-      if (styledPath.style.has_value()) {
-        switch (styledPath.style.value()) {
-        case PathStyle::kFill:
-          paint.setStyle(SkPaint::kFill_Style);
-          break;
-        case PathStyle::kStroke:
-          paint.setStyle(SkPaint::kStroke_Style);
-          break;
-        case PathStyle::kStrokeAndFill:
-          paint.setStyle(SkPaint::kStrokeAndFill_Style);
-          break;
-        }
-      }
-      canvas->drawPath(styledPath.path, paint);
-    }
-  }
+              const PathEffectComponent *pathEffect = nullptr) const;
 
   SkRect getBoundingBox() const {
     if (m_isDirty) {

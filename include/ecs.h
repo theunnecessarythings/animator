@@ -1,5 +1,6 @@
 #pragma once
 #define FLECS_CPP
+#undef emit
 #include <flecs.h>
 
 #include "include/codec/SkCodec.h"
@@ -69,6 +70,15 @@ struct ScriptComponent {
   sol::table scriptEnv; // each script gets its own Lua env
 };
 
+struct IScript;
+struct CppScriptComponent {
+  std::string source_path;
+  std::string library_path = "";
+  void *library_handle = nullptr;
+  IScript *script_instance = nullptr;
+  long last_modified_time = 0;
+};
+
 struct PathEffectComponent {
   enum class Type { None, Dash, Corner, Discrete };
   Type type = Type::None;
@@ -113,7 +123,8 @@ struct TransformComponent {
   float sx = 1.f, sy = 1.f; // scale
 };
 
-class Shape;
+#include "shapes.h"
+
 struct ShapeComponent {
   std::unique_ptr<Shape> shape;
   ShapeComponent() = default;
