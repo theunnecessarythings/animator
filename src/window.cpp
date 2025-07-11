@@ -1079,6 +1079,24 @@ void MainWindow::onOpenFile() {
   QJsonDocument doc(QJsonDocument::fromJson(loadFile.readAll()));
   m_canvas->setSelectedEntities({});
   m_canvas->resetSceneAndDeserialize(doc.object());
+
+  // Add file watchers for scripts in the loaded scene
+  QDir appDir(QCoreApplication::applicationDirPath());
+  m_canvas->scene().ecs().each(
+      [this, &appDir](flecs::entity, const ScriptComponent &sc) {
+        if (!sc.scriptPath.empty()) {
+          m_fileWatcher->addPath(
+              appDir.absoluteFilePath(QString::fromStdString(sc.scriptPath)));
+        }
+      });
+  m_canvas->scene().ecs().each(
+      [this, &appDir](flecs::entity, const CppScriptComponent &csc) {
+        if (!csc.source_path.empty()) {
+          m_fileWatcher->addPath(appDir.absoluteFilePath(
+              QString::fromStdString(csc.source_path)));
+        }
+      });
+
   m_sceneModel->setScene(&m_canvas->scene());
   m_sceneModel->refresh();
   m_canvas->update();
@@ -1480,18 +1498,36 @@ void MainWindow::syncTransformEditors(Entity e) {
 }
 
 void MainWindow::onScriptFileChanged(const QString &path) {
-  qDebug() << "Script file changed:" << path;
 
   if (path.endsWith(".lua")) {
+    qDebug() << "Lua script file changed:" << path;
     auto &ss = m_canvas->scene().getScriptSystem();
     ss.reloadScript(path.toStdString());
   } else if (path.endsWith(".cpp")) {
+    qDebug() << "C++ script file changed:" << path;
+    QDir appDir(QCoreApplication::applicationDirPath());
+    const QString canonicalChangedPath = QFileInfo(path).canonicalFilePath();
+
     auto &scene = m_canvas->scene();
-    flecs::entity e = scene.findEntityByCppScriptPath(path.toStdString());
-    if (e.is_valid()) {
+    flecs::entity entity_to_reload;
+
+    scene.ecs().each(
+        [&](flecs::entity e, const CppScriptComponent &csc) {
+          if (entity_to_reload.is_valid() || csc.source_path.empty()) {
+            return;
+          }
+          QString script_path_abs = appDir.absoluteFilePath(QString::fromStdString(csc.source_path));
+          if (QFileInfo(script_path_abs).canonicalFilePath() == canonicalChangedPath) {
+            entity_to_reload = e;
+          }
+        });
+
+
+    if (entity_to_reload.is_valid()) {
+      qDebug() << "Reloading C++ script for entity" << entity_to_reload.name();
       // Re-set the component to trigger the OnSet observer, which will
       // recompile and reload the script.
-      e.set<CppScriptComponent>({path.toStdString()});
+      entity_to_reload.modified<CppScriptComponent>();
     }
   }
 

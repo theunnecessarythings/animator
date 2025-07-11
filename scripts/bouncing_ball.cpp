@@ -25,7 +25,6 @@ public:
 
   void on_update(flecs::entity entity, flecs::world & /*world*/, float dt,
                  float /*total_time*/) override {
-    // std::cout << "on_update called for BouncingBallScript" << std::endl;
     x += vx * dt;
     y += vy * dt;
 

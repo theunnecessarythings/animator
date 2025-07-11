@@ -76,7 +76,6 @@ Scene::Scene()
         if (compile_ret != 0) {
           std::cerr << "CppScript Error: Compilation failed for "
                     << script.source_path << std::endl;
-          e.remove<CppScriptComponent>();
           return;
         }
 
@@ -84,7 +83,6 @@ Scene::Scene()
             dlopen(script.library_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
         if (!handle) {
           std::cerr << "CppScript Error: " << dlerror() << std::endl;
-          e.remove<CppScriptComponent>();
           return;
         }
         script.library_handle = handle;
@@ -94,7 +92,7 @@ Scene::Scene()
           std::cerr << "CppScript Error: Cannot find create_script."
                     << std::endl;
           dlclose(handle);
-          e.remove<CppScriptComponent>();
+          script.library_handle = nullptr;
           return;
         }
 
@@ -159,6 +157,25 @@ Entity Scene::createBackground(float width, float height) {
 }
 
 void Scene::attachCppScript(flecs::entity e, std::string path) {
+  void *old_handle = nullptr;
+  IScript *old_instance = nullptr;
+
+  // If there's an old script, store its handles so we can clean it up.
+  if (e.has<CppScriptComponent>()) {
+    auto old_script = e.get<CppScriptComponent>();
+    old_handle = old_script.library_handle;
+    old_instance = old_script.script_instance;
+  }
+  // If we have an old script, we must unload it BEFORE loading the new one.
+  if (old_handle) {
+    auto destroy_fn = (void (*)(IScript *))dlsym(old_handle, "destroy_script");
+    if (destroy_fn && old_instance) {
+      destroy_fn(old_instance);
+    }
+    dlclose(old_handle);
+  }
+
+  // Now, trigger the OnSet observer to compile and load the new script.
   e.set<CppScriptComponent>({path});
 }
 
