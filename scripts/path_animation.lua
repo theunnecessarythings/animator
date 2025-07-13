@@ -164,17 +164,35 @@ function on_draw(entity, registry, canvas)
     canvas:translate(-transform.x, -transform.y)
 
     -- Draw the progressively drawn spline
-    paint:setStyle(false, true) -- Stroke
-    paint:setStrokeWidth(4)
+    -- Draw the progressively drawn spline with glow
     if drawn_path then
+        -- Create a blur mask filter for the glow effect
+        local blur_radius = 8.0 -- Adjust as needed
+        local blur_mask_filter = CreateBlurMaskFilter(blur_radius, BlurStyle.Normal)
+
+        -- Draw the glow layer
+        paint:setColor(Color(255, 255, 255, 200)) -- White with some transparency
+        paint:setStrokeWidth(8) -- Wider stroke for the glow
+        paint:setStrokeCap(PaintCap.Round)
+        paint:setMaskFilter(blur_mask_filter)
+        canvas:drawPath(drawn_path, paint)
+
+        -- Draw the main path on top
+        paint:setColor(Color(255, 255, 255, 255)) -- Opaque white
+        paint:setStrokeWidth(4)
+        paint:setStrokeCap(PaintCap.Round)
+        paint:setMaskFilter(nil) -- Remove mask filter for the main path
         canvas:drawPath(drawn_path, paint)
     end
 
     canvas:restore()
 
-    -- Draw the highlight circle at the entity's local origin (0,0).
+    -- Draw the highlight circle at the entity's local origin (0,0) as an annulus.
     -- The canvas is already correctly transformed for this.
-    paint:setStyle(true, false) -- Fill
+    paint:setStyle(false, true) -- Stroke (for annulus)
+    paint:setStrokeWidth(3) -- Annulus thickness
+    paint:setColor(Color(255, 255, 255, 255)) -- White
+    paint:setMaskFilter(nil) -- Ensure no mask filter for the circle
     canvas:drawCircle(0, 0, 8, paint)
 end
 

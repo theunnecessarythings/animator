@@ -1,8 +1,13 @@
 #include "scripting.h"
 #include "canvas.h"
+#include "camera.h"
+
+#include "include/core/SkMaskFilter.h"
+#include "include/effects/SkBlurMaskFilter.h"
 
 ScriptingEngine::ScriptingEngine(flecs::world &w, SkiaCanvasWidget *canvas)
     : lua_(), world_(w), canvas_(canvas) {
+  Camera::setCanvas(canvas_);
   lua_.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
 
   // Redirect Lua's print to qDebug
@@ -47,7 +52,27 @@ ScriptingEngine::ScriptingEngine(flecs::world &w, SkiaCanvasWidget *canvas)
           p.setStyle(SkPaint::kFill_Style);
         else if (stroke)
           p.setStyle(SkPaint::kStroke_Style);
-      }));
+      }),
+      "setStrokeCap", sol::resolve<void(SkPaint::Cap)>(&SkPaint::setStrokeCap),
+      "setMaskFilter",
+      sol::resolve<void(sk_sp<SkMaskFilter>)>(&SkPaint::setMaskFilter));
+
+  lua_.new_enum("PaintCap", "Butt", SkPaint::kButt_Cap, "Round",
+                SkPaint::kRound_Cap, "Square", SkPaint::kSquare_Cap);
+
+  // Expose SkMaskFilter and SkBlurMaskFilter
+  lua_.new_usertype<SkMaskFilter>("MaskFilter");
+  // lua_.new_usertype<sk_sp<SkMaskFilter>>(
+  //     "sk_sp_MaskFilter", sol::no_constructor, sol::no_comparisons);
+  // lua_.set_function(
+  //     "CreateBlurMaskFilter",
+  //     [](SkScalar radius, SkBlurStyle style) -> sk_sp<SkMaskFilter> {
+  //       return SkMaskFilter::MakeBlur(style, radius);
+  //     });
+  //
+  // lua_.new_enum("BlurStyle", "Normal", kNormal_SkBlurStyle, "Solid",
+  //               kSolid_SkBlurStyle, "Outer", kOuter_SkBlurStyle, "Inner",
+  //               kInner_SkBlurStyle);
 
   lua_.new_usertype<SkPath>(
       "Path", sol::constructors<SkPath()>(), "moveTo",

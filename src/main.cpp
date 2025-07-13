@@ -1,3 +1,4 @@
+#include "camera.h"
 #include "window.h"
 #include <QApplication>
 #include <QSurfaceFormat>
@@ -18,6 +19,7 @@ int main(int argc, char **argv) {
 
   // Build default scene -----------------------------------------------------
   // w.canvas()->scene().createBackground(10000, 10000);
+  Camera::setCanvas(w.canvas());
   w.captureInitialScene();
   w.sceneModel()->refresh();
 

@@ -1,0 +1,34 @@
+{
+    "entities": [
+        {
+            "MaterialComponent": {
+                "antiAliased": true,
+                "color": 4284991081,
+                "isFilled": true,
+                "isStroked": false,
+                "strokeWidth": 1
+            },
+            "NameComponent": "Empty",
+            "ScriptComponent": {
+                "destroyFunction": "on_destroy",
+                "drawFunction": "on_draw",
+                "scriptPath": "../scripts/path_animation.lua",
+                "startFunction": "on_start",
+                "updateFunction": "on_update"
+            },
+            "ShapeComponent": {
+                "kind": "Empty",
+                "properties": {
+                }
+            },
+            "TransformComponent": {
+                "rotation": -1.1930044889450073,
+                "sx": 1,
+                "sy": 1,
+                "x": 233.7366485595703,
+                "y": 306.3277893066406
+            },
+            "id": 564
+        }
+    ]
+}
