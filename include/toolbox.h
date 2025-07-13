@@ -12,14 +12,17 @@ public:
     setDragEnabled(true);
     setDragDropMode(QAbstractItemView::DragOnly);
 
+    addTool("Empty", QIcon(":/icons/cursor.svg"), "Empty");
     addTool("Rectangle", QIcon(":/icons/rect.svg"), "Rectangle");
     addTool("Circle", QIcon(":/icons/circle.svg"), "Circle");
     addTool("Regular Polygram", QIcon(":/icons/circle.svg"), "RegularPolygram");
     addTool("Line", QIcon(":/icons/line.svg"), "Line");
     addTool("Arc", QIcon(":/icons/arc.svg"), "Arc");
-    addTool("Arc Between Points", QIcon(":/icons/arc_between_points.svg"), "ArcBetweenPoints");
+    addTool("Arc Between Points", QIcon(":/icons/arc_between_points.svg"),
+            "ArcBetweenPoints");
     addTool("Curved Arrow", QIcon(":/icons/curved_arrow.svg"), "CurvedArrow");
-    addTool("Curved Double Arrow", QIcon(":/icons/curved_double_arrow.svg"), "CurvedDoubleArrow");
+    addTool("Curved Double Arrow", QIcon(":/icons/curved_double_arrow.svg"),
+            "CurvedDoubleArrow");
     addTool("Annular Sector", QIcon(":/icons/arc.svg"), "AnnularSector");
     addTool("Sector", QIcon(":/icons/arc.svg"), "Sector");
     addTool("Annulus", QIcon(":/icons/circle.svg"), "Annulus");

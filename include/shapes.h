@@ -246,6 +246,9 @@ DEFINE_SHAPE_CLASS(AnnulusShape, "Annulus", ANNULUS_PROPERTIES)
   P(float, y4, "End Anchor Y", 0.0f)
 DEFINE_SHAPE_CLASS(CubicBezierShape, "CubicBezier", CUBIC_BEZIER_PROPERTIES)
 
+#define EMPTY_SHAPE_PROPERTIES(P)
+DEFINE_SHAPE_CLASS(EmptyShape, "Empty", EMPTY_SHAPE_PROPERTIES)
+
 class ArcPolygonShape : public Shape {
 public:
   std::vector<SkPoint> vertices;
@@ -304,6 +307,8 @@ inline std::unique_ptr<Shape> create(const std::string &kind) {
     return std::make_unique<CubicBezierShape>();
   if (kind == "ArcPolygon")
     return std::make_unique<ArcPolygonShape>();
+  if (kind == "Empty")
+    return std::make_unique<EmptyShape>();
   return nullptr;
 }
 } // namespace ShapeFactory

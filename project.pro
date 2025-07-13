@@ -26,7 +26,7 @@ LIBS += -L$$SKIA_ROOT/out/Shared -lskia \
         -L/mnt/ubuntu/home/sreeraj/Documents/lua-5.4.8/src  \
         /home/sreeraj/ubuntu/Documents/animator/lua-5.4.8/src/liblua.a
 
-SOURCES       += src/main.cpp src/commands.cpp src/window.cpp src/render.cpp src/scene.cpp src/canvas.cpp src/shapes.cpp flecs/flecs.c
+SOURCES       += src/main.cpp src/scripting.cpp src/commands.cpp src/window.cpp src/render.cpp src/scene.cpp src/canvas.cpp src/shapes.cpp flecs/flecs.c
 HEADERS       += include/canvas.h include/window.h include/toolbox.h include/ecs.h include/scene_model.h include/commands.h  \
                 include/serialization.h include/cpp_script_interface.h include/script_pch.h include/render.h include/shapes.h include/scripting.h include/scene.h
 RESOURCES     += resources/icons.qrc

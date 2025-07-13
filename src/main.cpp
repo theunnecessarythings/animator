@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
   w.resize(1024, 768);
 
   // Build default scene -----------------------------------------------------
-  w.canvas()->scene().createBackground(10000, 10000);
+  // w.canvas()->scene().createBackground(10000, 10000);
   w.captureInitialScene();
   w.sceneModel()->refresh();
 

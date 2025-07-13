@@ -173,9 +173,23 @@ void MainWindow::createMenus() {
 
   // --- View -----------------------------------------------------------
   QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
-  viewMenu->addAction(tr("Zoom In"));
-  viewMenu->addAction(tr("Zoom Out"));
-  viewMenu->addAction(tr("Reset View"));
+  QAction *zoomInAction = viewMenu->addAction(tr("Zoom In"));
+  zoomInAction->setShortcut(QKeySequence::ZoomIn);
+  connect(zoomInAction, &QAction::triggered, this, [this]() {
+    m_canvas->zoom(1.2f,
+                   QPointF(m_canvas->width() / 2.f, m_canvas->height() / 2.f));
+  });
+
+  QAction *zoomOutAction = viewMenu->addAction(tr("Zoom Out"));
+  zoomOutAction->setShortcut(QKeySequence::ZoomOut);
+  connect(zoomOutAction, &QAction::triggered, this, [this]() {
+    m_canvas->zoom(1.f / 1.2f,
+                   QPointF(m_canvas->width() / 2.f, m_canvas->height() / 2.f));
+  });
+
+  QAction *resetViewAction = viewMenu->addAction(tr("Reset View"));
+  connect(resetViewAction, &QAction::triggered, m_canvas,
+          &SkiaCanvasWidget::resetView);
 
   // --- Playback -------------------------------------------------------
   QMenu *playMenu = menuBar()->addMenu(tr("&Playback"));
@@ -287,6 +301,14 @@ void MainWindow::createTimelineDock() {
   connect(m_timelineSlider, &QSlider::valueChanged, this,
           &MainWindow::onTimelineSliderMoved);
   timelineLayout->addWidget(m_timelineSlider);
+
+  auto *durationSpinBox = new QDoubleSpinBox(this);
+  durationSpinBox->setRange(1.0, 300.0); // 1s to 5min
+  durationSpinBox->setValue(m_animationDuration);
+  durationSpinBox->setSuffix(" s");
+  connect(durationSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          this, &MainWindow::onDurationChanged);
+  timelineLayout->addWidget(durationSpinBox);
 
   timelineDock->setWidget(timelineWidget);
   addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
@@ -1052,7 +1074,7 @@ void MainWindow::onNewFile() {
   m_canvas->resetSceneAndDeserialize({});
   m_sceneModel->setScene(&m_canvas->scene());
   m_sceneModel->refresh();
-  m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
+  // m_canvas->scene().createBackground(m_canvas->width(), m_canvas->height());
 
   m_canvas->update();
   m_canvas->setSceneResetting(false);
@@ -1092,8 +1114,8 @@ void MainWindow::onOpenFile() {
   m_canvas->scene().ecs().each(
       [this, &appDir](flecs::entity, const CppScriptComponent &csc) {
         if (!csc.source_path.empty()) {
-          m_fileWatcher->addPath(appDir.absoluteFilePath(
-              QString::fromStdString(csc.source_path)));
+          m_fileWatcher->addPath(
+              appDir.absoluteFilePath(QString::fromStdString(csc.source_path)));
         }
       });
 
@@ -1463,6 +1485,12 @@ void MainWindow::onTimelineSliderMoved(int value) {
   updateTimeDisplay();
 }
 
+void MainWindow::onDurationChanged(double value) {
+  m_animationDuration = value;
+  m_timelineSlider->setRange(0, static_cast<int>(m_animationDuration * 100));
+  updateTimeDisplay();
+}
+
 void MainWindow::onPlayPauseButtonClicked() {
   if (m_isPlaying) {
     // Pause
@@ -1511,17 +1539,17 @@ void MainWindow::onScriptFileChanged(const QString &path) {
     auto &scene = m_canvas->scene();
     flecs::entity entity_to_reload;
 
-    scene.ecs().each(
-        [&](flecs::entity e, const CppScriptComponent &csc) {
-          if (entity_to_reload.is_valid() || csc.source_path.empty()) {
-            return;
-          }
-          QString script_path_abs = appDir.absoluteFilePath(QString::fromStdString(csc.source_path));
-          if (QFileInfo(script_path_abs).canonicalFilePath() == canonicalChangedPath) {
-            entity_to_reload = e;
-          }
-        });
-
+    scene.ecs().each([&](flecs::entity e, const CppScriptComponent &csc) {
+      if (entity_to_reload.is_valid() || csc.source_path.empty()) {
+        return;
+      }
+      QString script_path_abs =
+          appDir.absoluteFilePath(QString::fromStdString(csc.source_path));
+      if (QFileInfo(script_path_abs).canonicalFilePath() ==
+          canonicalChangedPath) {
+        entity_to_reload = e;
+      }
+    });
 
     if (entity_to_reload.is_valid()) {
       qDebug() << "Reloading C++ script for entity" << entity_to_reload.name();

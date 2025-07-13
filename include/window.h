@@ -52,6 +52,7 @@ private slots:
   void onAnimationTimerTimeout();
   void onTimelineSliderMoved(int value);
   void updateTimeDisplay();
+  void onDurationChanged(double value);
   // Scene selection
   void onSceneSelectionChanged(const QItemSelection &selected,
                                const QItemSelection &deselected);

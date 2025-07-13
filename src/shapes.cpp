@@ -351,6 +351,10 @@ void CubicBezierShape::rebuildPaths() const {
   m_paths.push_back(styledPath);
 }
 
+void EmptyShape::rebuildPaths() const {
+  m_paths.clear();
+}
+
 void ArcPolygonShape::rebuildPaths() const {
   m_paths.clear();
   if (vertices.size() < 2) {

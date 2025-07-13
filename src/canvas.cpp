@@ -26,8 +26,8 @@ void SkiaCanvasWidget::setVideoRendering(bool isRendering) {
 }
 
 QImage SkiaCanvasWidget::renderHighResFrame(int width, int height, float time) {
-  auto imageInfo =
-      SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+  auto imageInfo = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+                                     kPremul_SkAlphaType);
   sk_sp<SkSurface> surface = SkSurfaces::Raster(imageInfo);
   if (!surface) {
     qWarning() << "Failed to create offscreen SkSurface for rendering.";
@@ -41,7 +41,8 @@ QImage SkiaCanvasWidget::renderHighResFrame(int width, int height, float time) {
   // Calculate scale factor to fit and preserve aspect ratio
   float canvasWidth = this->width();
   float canvasHeight = this->height();
-  float scale = std::min((float)width / canvasWidth, (float)height / canvasHeight);
+  float scale =
+      std::min((float)width / canvasWidth, (float)height / canvasHeight);
 
   // Calculate offsets to center the scaled content
   float scaledWidth = canvasWidth * scale;
@@ -66,6 +67,34 @@ QImage SkiaCanvasWidget::renderHighResFrame(int width, int height, float time) {
   }
 
   return image;
+}
+
+void SkiaCanvasWidget::resetView() {
+  m_viewMatrix.setIdentity();
+  update();
+}
+
+void SkiaCanvasWidget::zoom(float factor, const QPointF &anchor) {
+  SkPoint skAnchor = mapScreenToView(anchor);
+  m_viewMatrix.preScale(factor, factor, skAnchor.x(), skAnchor.y());
+  update();
+}
+
+void SkiaCanvasWidget::pan(float dx, float dy) {
+  m_viewMatrix.preTranslate(dx, dy);
+  update();
+}
+
+QPointF SkiaCanvasWidget::getViewCenter() const {
+  SkMatrix inverseView;
+  if (!m_viewMatrix.invert(&inverseView)) {
+    return QPointF(width() / 2.0, height() / 2.0);
+  }
+  SkPoint center = {static_cast<float>(width() / 2.0),
+                    static_cast<float>(height() / 2.0)};
+  SkSpan<SkPoint> centerSpan(&center, 1);
+  inverseView.mapPoints(centerSpan);
+  return QPointF(center.x(), center.y());
 }
 
 // -------------------------------------------------------------------------
@@ -120,7 +149,8 @@ void SkiaCanvasWidget::paintGL() {
     return;
 
   SkCanvas *c = fSurface->getCanvas();
-  c->clear(SK_ColorWHITE);
+  c->clear(SkColorSetARGB(255, 22, 22, 22));
+  c->setMatrix(m_viewMatrix);
 
   // Render scene ------------------------------------------------------
   scene_->draw(c, currentTime_);
@@ -149,7 +179,7 @@ void SkiaCanvasWidget::dropEvent(QDropEvent *e) {
   if (!e->mimeData()->hasFormat("application/x-skia-shape"))
     return;
   QByteArray id = e->mimeData()->data("application/x-skia-shape");
-  QPointF pos = e->posF();
+  SkPoint pos = mapScreenToView(e->posF());
   e->acceptProposedAction();
 
   auto ent = scene_->createShape(id.toStdString(), pos.x(), pos.y());
@@ -162,6 +192,14 @@ void SkiaCanvasWidget::dropEvent(QDropEvent *e) {
 //  Mouse interaction (selection, drag, rotate, marquee)
 // -------------------------------------------------------------------------
 void SkiaCanvasWidget::mousePressEvent(QMouseEvent *e) {
+  if (e->button() == Qt::MiddleButton ||
+      (e->button() == Qt::RightButton && e->modifiers() & Qt::AltModifier)) {
+    m_isPanning = true;
+    m_lastPanPos = e->pos();
+    setCursor(Qt::ClosedHandCursor);
+    return;
+  }
+
   bool shiftPressed = e->modifiers() & Qt::ShiftModifier;
   Entity clicked = kInvalidEntity;
   isDragging_ = false;
@@ -169,6 +207,7 @@ void SkiaCanvasWidget::mousePressEvent(QMouseEvent *e) {
   initialTransforms_.clear();
 
   auto &ecs = scene_->ecs();
+  SkPoint clickPos = mapScreenToView(e->pos());
 
   // Hit detection ------------------------------------------------------
   ecs.each<TransformComponent>([&](flecs::entity ent, TransformComponent &tr) {
@@ -184,7 +223,7 @@ void SkiaCanvasWidget::mousePressEvent(QMouseEvent *e) {
       SkPoint corners[4];
       originalBounds.toQuad(corners);
       m.mapPoints(corners, corners);
-      if (isPointInPolygon(SkPoint::Make(e->x(), e->y()), corners, 4))
+      if (isPointInPolygon(clickPos, corners, 4))
         clicked = ent;
     }
   });
@@ -208,7 +247,7 @@ void SkiaCanvasWidget::mousePressEvent(QMouseEvent *e) {
         m.mapPoints(span);
         SkRect hb = SkRect::MakeLTRB(handle.x() - 8, handle.y() - 8,
                                      handle.x() + 8, handle.y() + 8);
-        if (hb.contains(e->x(), e->y())) {
+        if (hb.contains(clickPos.x(), clickPos.y())) {
           isRotating_ = true;
           dragStart_ = e->pos();
           initialTransforms_[sel] = {tc.x, tc.y, tc.rotation, tc.sx, tc.sy};
@@ -254,15 +293,21 @@ void SkiaCanvasWidget::mousePressEvent(QMouseEvent *e) {
 }
 
 void SkiaCanvasWidget::mouseMoveEvent(QMouseEvent *e) {
+  if (m_isPanning) {
+    QPointF delta = e->pos() - m_lastPanPos;
+    m_lastPanPos = e->pos();
+    m_viewMatrix.preTranslate(delta.x(), delta.y());
+    update();
+    return;
+  }
+
   if (isRotating_ && selectedEntities_.size() == 1) {
     Entity ent = selectedEntities_.first();
     if (ent.is_alive() && ent.has<TransformComponent>()) {
       auto &tc = ent.get_mut<TransformComponent>();
       SkPoint center = {tc.x, tc.y};
-      SkPoint prev = {static_cast<float>(dragStart_.x()),
-                      static_cast<float>(dragStart_.y())};
-      SkPoint curr = {static_cast<float>(e->pos().x()),
-                      static_cast<float>(e->pos().y())};
+      SkPoint prev = mapScreenToView(dragStart_);
+      SkPoint curr = mapScreenToView(e->pos());
       float angleDelta =
           std::atan2(curr.y() - center.y(), curr.x() - center.x()) -
           std::atan2(prev.y() - center.y(), prev.x() - center.x());
@@ -277,11 +322,20 @@ void SkiaCanvasWidget::mouseMoveEvent(QMouseEvent *e) {
     }
   } else if (isDragging_ && !selectedEntities_.isEmpty()) {
     QPointF delta = e->pos() - dragStart_;
+    SkMatrix inverseView;
+    if (!m_viewMatrix.invert(&inverseView)) {
+      return;
+    }
+    SkVector skDelta = {static_cast<float>(delta.x()),
+                        static_cast<float>(delta.y())};
+    SkSpan<SkPoint> span(&skDelta, 1);
+    inverseView.mapVectors(span);
+
     for (Entity ent : selectedEntities_)
       if (ent.is_alive() && ent.has<TransformComponent>()) {
         auto &tc = ent.get_mut<TransformComponent>();
-        tc.x = initialTransforms_[ent].x + delta.x();
-        tc.y = initialTransforms_[ent].y + delta.y();
+        tc.x = initialTransforms_[ent].x + skDelta.x();
+        tc.y = initialTransforms_[ent].y + skDelta.y();
       }
     if (selectedEntities_.size() == 1)
       emit transformChanged(selectedEntities_.first());
@@ -293,13 +347,23 @@ void SkiaCanvasWidget::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void SkiaCanvasWidget::mouseReleaseEvent(QMouseEvent *e) {
+  if (m_isPanning) {
+    m_isPanning = false;
+    setCursor(Qt::ArrowCursor);
+    return;
+  }
+
   auto &ecs = scene_->ecs();
 
   if (isMarqueeSelecting_) {
     isMarqueeSelecting_ = false;
     bool shiftPressed = e->modifiers() & Qt::ShiftModifier;
-    QRectF selRect(marqueeStartPoint_, marqueeEndPoint_);
-    selRect = selRect.normalized();
+    SkPoint marqueeStart = mapScreenToView(marqueeStartPoint_);
+    SkPoint marqueeEnd = mapScreenToView(marqueeEndPoint_);
+    SkRect selRect = SkRect::MakeLTRB(marqueeStart.x(), marqueeStart.y(),
+                                      marqueeEnd.x(), marqueeEnd.y());
+    selRect.sort();
+
     if (!shiftPressed)
       selectedEntities_.clear();
 
@@ -319,8 +383,7 @@ void SkiaCanvasWidget::mouseReleaseEvent(QMouseEvent *e) {
             m.preScale(tr.sx, tr.sy);
             SkRect aabb;
             m.mapRect(&aabb, bb);
-            if (selRect.intersects(
-                    QRectF(aabb.x(), aabb.y(), aabb.width(), aabb.height())))
+            if (SkRect::Intersects(selRect, aabb))
               if (!selectedEntities_.contains(ent))
                 selectedEntities_.append(ent);
           }
@@ -344,6 +407,12 @@ void SkiaCanvasWidget::mouseReleaseEvent(QMouseEvent *e) {
   isDragging_ = isRotating_ = false;
   emit dragEnded();
   update();
+}
+
+void SkiaCanvasWidget::wheelEvent(QWheelEvent *e) {
+  float delta = e->angleDelta().y();
+  float factor = (delta > 0) ? 1.1f : 1.0f / 1.1f;
+  zoom(factor, e->position());
 }
 
 // -------------------------------------------------------------------------
@@ -400,4 +469,16 @@ void SkiaCanvasWidget::drawMarquee(SkCanvas *c) {
                               marqueeEndPoint_.x(), marqueeEndPoint_.y());
   c->drawRect(r, fill);
   c->drawRect(r, border);
+}
+
+SkPoint SkiaCanvasWidget::mapScreenToView(const QPointF &point) const {
+  SkMatrix inverseView;
+  if (!m_viewMatrix.invert(&inverseView)) {
+    // Should not happen with scale/translate only
+    return SkPoint::Make(point.x(), point.y());
+  }
+  SkPoint sk_point = SkPoint::Make(point.x(), point.y());
+  SkSpan<SkPoint> sk_point_span(&sk_point, 1);
+  inverseView.mapPoints(sk_point_span);
+  return sk_point;
 }

@@ -25,6 +25,7 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QSurfaceFormat>
+#include <QWheelEvent>
 
 #include <cmath>
 #include <memory>
@@ -35,8 +36,9 @@ class SkiaCanvasWidget : public QOpenGLWidget, protected QOpenGLFunctions {
   Q_OBJECT
 public:
   explicit SkiaCanvasWidget(QWidget *parent = nullptr)
-      : QOpenGLWidget(parent), scene_(std::make_unique<Scene>()) {
+      : QOpenGLWidget(parent), scene_(std::make_unique<Scene>(this)) {
     setAcceptDrops(true);
+    m_viewMatrix.setIdentity();
   }
 
   Scene &scene() { return *scene_; }
@@ -51,6 +53,12 @@ public:
   void setVideoRendering(bool isRendering);
 
   QImage renderHighResFrame(int width, int height, float time);
+
+  // View controls
+  void resetView();
+  void zoom(float factor, const QPointF &anchor);
+  void pan(float dx, float dy);
+  QPointF getViewCenter() const;
 
 protected:
   // -------------------------------------------------------------------------
@@ -93,6 +101,7 @@ protected:
   void mouseMoveEvent(QMouseEvent *e) override;
 
   void mouseReleaseEvent(QMouseEvent *e) override;
+  void wheelEvent(QWheelEvent *e) override;
 
   // -------------------------------------------------------------------------
   //  Overlay helpers
@@ -113,6 +122,7 @@ signals:
   void dragEnded();
 
 private:
+  SkPoint mapScreenToView(const QPointF &point) const;
   struct TransformData {
     float x, y, rotation, sx, sy;
   };
@@ -134,4 +144,9 @@ private:
   QPointF dragStart_, marqueeStartPoint_, marqueeEndPoint_;
   float currentTime_ = 0.f;
   QMap<Entity, TransformData> initialTransforms_;
+
+  // View state
+  SkMatrix m_viewMatrix;
+  bool m_isPanning = false;
+  QPointF m_lastPanPos;
 };

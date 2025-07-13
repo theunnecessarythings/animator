@@ -16,9 +16,11 @@
 #include <memory>
 #include <unordered_map>
 
+class SkiaCanvasWidget;
+
 class Scene {
 public:
-  Scene();
+  Scene(SkiaCanvasWidget *canvas);
 
   ~Scene() { world.reset(); }
 

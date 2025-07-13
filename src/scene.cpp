@@ -8,8 +8,19 @@
 #include <iostream>
 #include <sys/stat.h> // for stat to check file modification times
 
-Scene::Scene()
-    : world(std::make_unique<flecs::world>()), scriptingEngine(*world),
+#include "canvas.h"
+#include "ecs.h"
+#include "scene.h"
+
+#include <QtConcurrent/QtConcurrent>
+#include <cstdlib> // for system()
+#include <dlfcn.h> // for dlopen, dlsym, dlclose
+#include <future>
+#include <iostream>
+#include <sys/stat.h> // for stat to check file modification times
+
+Scene::Scene(SkiaCanvasWidget *canvas)
+    : world(std::make_unique<flecs::world>()), scriptingEngine(*world, canvas),
       scriptSystem(*world, scriptingEngine), renderer(*world, scriptSystem) {
   world->set<TimeSingleton>({0.f});
 
